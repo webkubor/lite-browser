@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { RecipeEngine } from '../src/recipe.js';
 import { formatSnapshot } from '../src/dom.js';
+import { join } from 'node:path';
+import { existsSync, unlinkSync } from 'node:fs';
 
 describe('RecipeEngine & SOP Evolution', () => {
   const TEST_SOP = 'unit-test-sop';
@@ -65,6 +67,28 @@ describe('RecipeEngine & SOP Evolution', () => {
     expect(sop.changelog.length).toBe(1);
   });
 
+  it('should support hover, press, select, and upload actions in trajectory', () => {
+    RecipeEngine.recordAction({ type: 'open', url: 'https://example.com' });
+    RecipeEngine.recordAction({ type: 'hover', target: '@1', selector: '.menu-item', x: 20, y: 30 });
+    RecipeEngine.recordAction({ type: 'press', key: 'Enter' });
+    RecipeEngine.recordAction({ type: 'select', target: '@2', selector: '#country', value: 'CN' });
+    RecipeEngine.recordAction({ type: 'upload', target: '@3', selector: '#avatar', files: ['/tmp/test.png'] });
+
+    const sop = engine.saveOrUpdate({
+      name: TEST_SOP,
+      description: '多动作交互测试',
+    });
+
+    expect(sop.stepCount).toBe(5);
+    expect(sop.steps[1].action).toBe('hover');
+    expect(sop.steps[2].action).toBe('press');
+    expect(sop.steps[2].key).toBe('Enter');
+    expect(sop.steps[3].action).toBe('select');
+    expect(sop.steps[3].value).toBe('CN');
+    expect(sop.steps[4].action).toBe('upload');
+    expect(sop.steps[4].files).toEqual(['/tmp/test.png']);
+  });
+
   it('should evolve and auto-update existing SOP without creating duplicates', () => {
     // 第一次录入 v1.0.0
     RecipeEngine.recordAction({ type: 'open', url: 'https://juejin.cn/draft' });
@@ -115,6 +139,26 @@ describe('RecipeEngine & SOP Evolution', () => {
     // 无关任务不匹配
     const matchNone = engine.matchSOP({ intent: '预定机票', domain: 'ctrip.com' });
     expect(matchNone.matched).toBeNull();
+  });
+
+  it('should export, import, and validate SOPs correctly', () => {
+    RecipeEngine.recordAction({ type: 'open', url: 'https://example.com' });
+    RecipeEngine.recordAction({ type: 'click', target: '@1', selector: '#go' });
+    const original = engine.saveOrUpdate({ name: TEST_SOP, description: '测试导出' });
+
+    const exported = engine.exportSOP(TEST_SOP);
+    expect(typeof exported).toBe('string');
+    expect(exported).toContain(TEST_SOP);
+
+    const validation = engine.validateSOP(JSON.parse(exported));
+    expect(validation.valid).toBe(true);
+
+    const invalid = engine.validateSOP({ name: 'broken' });
+    expect(invalid.valid).toBe(false);
+    expect(invalid.errors.length).toBeGreaterThan(0);
+
+    const imported = engine.importSOP(exported, 'global');
+    expect(imported.name).toBe(TEST_SOP);
   });
 });
 

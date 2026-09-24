@@ -17,6 +17,18 @@ export class BrowserActions {
     this.client = client;
   }
 
+  static async launchOrConnect(options: { url?: string; headless?: boolean; port?: number; userDataDir?: string; profile?: string; temp?: boolean } = {}): Promise<BrowserActions> {
+    const mgr = new ChromeManager(options.port || 9222);
+    const session = await mgr.getOrLaunch(options);
+    const client = new CdpClient(session.wsUrl);
+    await client.connect();
+    const browser = new BrowserActions(client);
+    if (options.url && options.url !== 'about:blank') {
+      await browser.open(options.url);
+    }
+    return browser;
+  }
+
   static async connectToSession(): Promise<BrowserActions> {
     const session = ChromeManager.getActiveSession();
     if (!session || !session.wsUrl) {
@@ -41,12 +53,32 @@ export class BrowserActions {
     await this.client.send('Page.navigate', { url: targetUrl });
     await navPromise;
 
+    ChromeManager.updateSessionUrl(targetUrl);
+
     RecipeEngine.recordAction({
       type: 'open',
       url: targetUrl,
     });
 
     return { ok: true, url: targetUrl };
+  }
+
+  async getTitle(): Promise<string> {
+    await this.client.send('Runtime.enable');
+    const pageInfo = await this.client.send('Runtime.evaluate', {
+      expression: 'document.title',
+      returnByValue: true,
+    });
+    return pageInfo.result?.value || '';
+  }
+
+  async getUrl(): Promise<string> {
+    await this.client.send('Runtime.enable');
+    const pageInfo = await this.client.send('Runtime.evaluate', {
+      expression: 'window.location.href',
+      returnByValue: true,
+    });
+    return pageInfo.result?.value || '';
   }
 
   async snapshot(): Promise<SnapshotResult> {
@@ -235,6 +267,181 @@ export class BrowserActions {
     }
 
     return res.result.value;
+  }
+
+  async hover(target: string): Promise<{ ok: boolean; target: string; x: number; y: number; selector: string }> {
+    let x: number, y: number, selector: string, desc: string;
+
+    if (target.startsWith('@')) {
+      const { elements } = await this.snapshot();
+      const found = elements.find((e) => e.id === target);
+      if (!found) {
+        throw new Error(`未在页面找到编号为 ${target} 的元素`);
+      }
+      x = found.x;
+      y = found.y;
+      selector = found.selector;
+      desc = `[${found.tag}:${found.role}] "${found.text}"`;
+    } else {
+      selector = target;
+      desc = target;
+      const posRes = await this.client.send('Runtime.evaluate', {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(selector)});
+          if (!el) return null;
+          const rect = el.getBoundingClientRect();
+          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+        })()`,
+        returnByValue: true,
+      });
+
+      if (!posRes.result.value) {
+        throw new Error(`未找到匹配选择器 "${selector}" 的可见元素`);
+      }
+      x = posRes.result.value.x;
+      y = posRes.result.value.y;
+    }
+
+    await this.client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+    });
+
+    RecipeEngine.recordAction({
+      type: 'hover',
+      target,
+      selector,
+      x,
+      y,
+      targetDescription: desc,
+    });
+
+    return { ok: true, target, x, y, selector };
+  }
+
+  async press(key: string): Promise<{ ok: boolean; key: string }> {
+    const keyMap: Record<string, { code: string; key: string; keyCode: number }> = {
+      enter: { code: 'Enter', key: 'Enter', keyCode: 13 },
+      tab: { code: 'Tab', key: 'Tab', keyCode: 9 },
+      escape: { code: 'Escape', key: 'Escape', keyCode: 27 },
+      backspace: { code: 'Backspace', key: 'Backspace', keyCode: 8 },
+      arrowdown: { code: 'ArrowDown', key: 'ArrowDown', keyCode: 40 },
+      arrowup: { code: 'ArrowUp', key: 'ArrowUp', keyCode: 38 },
+      arrowleft: { code: 'ArrowLeft', key: 'ArrowLeft', keyCode: 37 },
+      arrowright: { code: 'ArrowRight', key: 'ArrowRight', keyCode: 39 },
+      space: { code: 'Space', key: ' ', keyCode: 32 },
+    };
+
+    const normKey = key.toLowerCase();
+    const info = keyMap[normKey] || { code: key, key, keyCode: 0 };
+
+    await this.client.send('Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      windowsVirtualKeyCode: info.keyCode,
+      code: info.code,
+      key: info.key,
+      text: info.key.length === 1 ? info.key : undefined,
+    });
+
+    await this.client.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      windowsVirtualKeyCode: info.keyCode,
+      code: info.code,
+      key: info.key,
+    });
+
+    RecipeEngine.recordAction({
+      type: 'press',
+      key,
+    });
+
+    return { ok: true, key };
+  }
+
+  async select(target: string, value: string): Promise<{ ok: boolean; target: string; value: string }> {
+    let selector = target;
+    if (target.startsWith('@')) {
+      const { elements } = await this.snapshot();
+      const found = elements.find((e) => e.id === target);
+      if (!found) throw new Error(`未在页面找到编号为 ${target} 的元素`);
+      selector = found.selector;
+    }
+
+    const res = await this.client.send('Runtime.evaluate', {
+      expression: `(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el || el.tagName !== 'SELECT') return false;
+        el.value = ${JSON.stringify(value)};
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`,
+      returnByValue: true,
+    });
+
+    if (!res.result?.value) {
+      throw new Error(`未能将下拉选择框 "${selector}" 的值设为 "${value}"`);
+    }
+
+    RecipeEngine.recordAction({
+      type: 'select',
+      target,
+      selector,
+      value,
+    });
+
+    return { ok: true, target, value };
+  }
+
+  async upload(target: string, files: string[]): Promise<{ ok: boolean; target: string; files: string[] }> {
+    let selector = target;
+    if (target.startsWith('@')) {
+      const { elements } = await this.snapshot();
+      const found = elements.find((e) => e.id === target);
+      if (!found) throw new Error(`未在页面找到编号为 ${target} 的元素`);
+      selector = found.selector;
+    }
+
+    await this.client.send('DOM.enable');
+    const evalRes = await this.client.send('Runtime.evaluate', {
+      expression: `document.querySelector(${JSON.stringify(selector)})`,
+      returnByValue: false,
+    });
+
+    if (!evalRes.result?.objectId) {
+      throw new Error(`未在页面中找到目标文件上传元素: "${selector}"`);
+    }
+
+    await this.client.send('DOM.setFileInputFiles', {
+      files,
+      objectId: evalRes.result.objectId,
+    });
+
+    RecipeEngine.recordAction({
+      type: 'upload',
+      target,
+      selector,
+      files,
+    });
+
+    return { ok: true, target, files };
+  }
+
+  async getCookies(urls?: string[]): Promise<any[]> {
+    await this.client.send('Network.enable');
+    const res = await this.client.send('Network.getCookies', urls ? { urls } : {});
+    return res.cookies || [];
+  }
+
+  async setCookies(cookies: any[]): Promise<void> {
+    await this.client.send('Network.enable');
+    await this.client.send('Network.setCookies', { cookies });
+  }
+
+  async clearCookies(): Promise<void> {
+    await this.client.send('Network.enable');
+    await this.client.send('Network.clearBrowserCookies');
   }
 
   async cdp(method: string, params: Record<string, any> = {}): Promise<any> {

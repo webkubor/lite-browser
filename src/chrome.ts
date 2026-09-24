@@ -3,12 +3,14 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import type { SessionState } from './types.js';
+import { join } from 'node:path';
+import type { SessionState, LaunchOptions } from './types.js';
 
 const SESSION_FILE = '/tmp/lite-browser-session.json';
 const DEFAULT_PORT = 9222;
+export const PROFILES_DIR = join(homedir(), '.lite-browser', 'profiles');
 
 export class ChromeManager {
   public port: number;
@@ -42,10 +44,27 @@ export class ChromeManager {
     return null;
   }
 
-  async getOrLaunch(options: { headless?: boolean; url?: string; userDataDir?: string } = {}): Promise<SessionState> {
-    const { headless = false, url = 'about:blank', userDataDir } = options;
+  async getOrLaunch(options: LaunchOptions & { temp?: boolean } = {}): Promise<SessionState> {
+    const { headless = false, url = 'about:blank', userDataDir, profile, temp = false } = options;
 
     let versionInfo = await this.checkPort();
+
+    const profileName = profile || (temp ? undefined : 'default');
+    let effectiveUserDataDir = userDataDir;
+
+    if (!effectiveUserDataDir) {
+      if (temp) {
+        effectiveUserDataDir = `/tmp/lite-browser-profile-${this.port}`;
+      } else {
+        effectiveUserDataDir = join(PROFILES_DIR, profileName || 'default');
+      }
+    }
+
+    if (!existsSync(effectiveUserDataDir)) {
+      try {
+        mkdirSync(effectiveUserDataDir, { recursive: true });
+      } catch (_) {}
+    }
 
     if (!versionInfo) {
       const chromePath = ChromeManager.getChromePath();
@@ -62,12 +81,7 @@ export class ChromeManager {
         args.push('--headless=new', '--disable-gpu');
       }
 
-      if (userDataDir) {
-        args.push(`--user-data-dir=${userDataDir}`);
-      } else {
-        args.push(`--user-data-dir=/tmp/lite-browser-profile-${this.port}`);
-      }
-
+      args.push(`--user-data-dir=${effectiveUserDataDir}`);
       args.push(url);
 
       const proc = spawn(chromePath, args, {
@@ -100,6 +114,7 @@ export class ChromeManager {
       wsUrl: targetPage.webSocketDebuggerUrl,
       targetId: targetPage.id,
       url: targetPage.url,
+      profile: profileName,
       updatedAt: new Date().toISOString(),
     };
     writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
@@ -125,6 +140,26 @@ export class ChromeManager {
       return JSON.parse(readFileSync(SESSION_FILE, 'utf-8'));
     } catch (_) {
       return null;
+    }
+  }
+
+  static updateSessionUrl(url: string): void {
+    const session = ChromeManager.getActiveSession();
+    if (session) {
+      session.url = url;
+      session.updatedAt = new Date().toISOString();
+      try {
+        writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+      } catch (_) {}
+    }
+  }
+
+  static listProfiles(): string[] {
+    if (!existsSync(PROFILES_DIR)) return [];
+    try {
+      return readdirSync(PROFILES_DIR);
+    } catch (_) {
+      return [];
     }
   }
 

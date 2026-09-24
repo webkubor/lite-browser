@@ -1,5 +1,5 @@
 /**
- * recipe.ts —— SOP 元数组、轨迹沉淀、自进化更新与自动化匹配执行引擎
+ * recipe.ts —— SOP 元数组、轨迹沉淀、自进化更新、团队共享与自动化匹配执行引擎
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
@@ -7,7 +7,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { SOP, SOPMatch, SOPSchedule, SOPParameter, SOPChangelog, RecipeStep, TrajectoryAction } from './types.js';
 
-const RECIPES_DIR = join(homedir(), '.lite-browser', 'recipes');
+export const GLOBAL_RECIPES_DIR = join(homedir(), '.lite-browser', 'recipes');
+export const LOCAL_RECIPES_DIR = join(process.cwd(), '.lite-browser', 'recipes');
 const ACTIVE_TRAJECTORY_FILE = '/tmp/lite-browser-trajectory.json';
 
 export interface SaveSOPOptions {
@@ -19,6 +20,7 @@ export interface SaveSOPOptions {
   frequency?: string;
   cron?: string;
   reason?: string;
+  scope?: 'global' | 'project';
 }
 
 export interface MatchQuery {
@@ -46,13 +48,18 @@ function bumpVersion(version: string, type: 'patch' | 'minor' = 'patch'): string
 }
 
 export class RecipeEngine {
-  constructor() {
+  public globalDir: string;
+  public localDir: string;
+
+  constructor(globalDir = GLOBAL_RECIPES_DIR, localDir = LOCAL_RECIPES_DIR) {
+    this.globalDir = globalDir;
+    this.localDir = localDir;
     this.ensureDir();
   }
 
   ensureDir(): void {
-    if (!existsSync(RECIPES_DIR)) {
-      mkdirSync(RECIPES_DIR, { recursive: true });
+    if (!existsSync(this.globalDir)) {
+      mkdirSync(this.globalDir, { recursive: true });
     }
   }
 
@@ -158,6 +165,38 @@ export class RecipeEngine {
           y: act.y,
           description: `点击 ${act.targetDescription || act.selector || act.target}`,
         });
+      } else if (act.type === 'hover') {
+        optimizedSteps.push({
+          step: optimizedSteps.length + 1,
+          action: 'hover',
+          target: act.selector || act.target,
+          x: act.x,
+          y: act.y,
+          description: `悬停在 ${act.targetDescription || act.selector || act.target}`,
+        });
+      } else if (act.type === 'press') {
+        optimizedSteps.push({
+          step: optimizedSteps.length + 1,
+          action: 'press',
+          key: act.key,
+          description: `按下按键 ${act.key}`,
+        });
+      } else if (act.type === 'select') {
+        optimizedSteps.push({
+          step: optimizedSteps.length + 1,
+          action: 'select',
+          target: act.selector || act.target,
+          value: act.value,
+          description: `选择下拉框 ${act.selector || act.target} 为 "${act.value}"`,
+        });
+      } else if (act.type === 'upload') {
+        optimizedSteps.push({
+          step: optimizedSteps.length + 1,
+          action: 'upload',
+          target: act.selector || act.target,
+          files: act.files,
+          description: `上传文件至 ${act.selector || act.target}`,
+        });
       } else if (act.type === 'scroll') {
         optimizedSteps.push({
           step: optimizedSteps.length + 1,
@@ -179,7 +218,16 @@ export class RecipeEngine {
       }
     }
 
-    const filePath = join(RECIPES_DIR, `${opts.name}.json`);
+    // 判断保存目录与作用域
+    const targetScope: 'global' | 'project' =
+      opts.scope || (existsSync(join(this.localDir, `${opts.name}.json`)) ? 'project' : 'global');
+    const targetDir = targetScope === 'project' ? this.localDir : this.globalDir;
+
+    if (!existsSync(targetDir)) {
+      mkdirSync(targetDir, { recursive: true });
+    }
+
+    const filePath = join(targetDir, `${opts.name}.json`);
     const now = new Date().toISOString();
     let sop: SOP;
 
@@ -202,6 +250,7 @@ export class RecipeEngine {
         name: opts.name,
         version: newVersion,
         description: opts.description || old.description || `自动化 SOP: ${opts.name}`,
+        scope: targetScope,
         match: {
           urlPatterns: mergedUrls,
           intents: mergedIntents,
@@ -236,6 +285,7 @@ export class RecipeEngine {
         name: opts.name,
         version: '1.0.0',
         description: opts.description || `自动化 SOP: ${opts.name}`,
+        scope: targetScope,
         match: {
           urlPatterns: Array.from(detectedUrlPatterns),
           intents: opts.intent ? [opts.intent] : [opts.name],
@@ -286,6 +336,12 @@ export class RecipeEngine {
     for (const item of sops) {
       let score = 0;
       const reasons: string[] = [];
+
+      // 本地项目 SOP 优先 (+0.05)
+      if (item.scope === 'project') {
+        score += 0.05;
+        reasons.push('项目级优先');
+      }
 
       // 1. 域名精确匹配 (+0.4)
       if (query.domain && item.match?.domains?.includes(query.domain)) {
@@ -347,8 +403,8 @@ export class RecipeEngine {
    * 记录执行结果并自增频次统计
    */
   recordRun(name: string, success: boolean): void {
-    const filePath = join(RECIPES_DIR, `${name}.json`);
-    if (!existsSync(filePath)) return;
+    const filePath = this._findFilePath(name);
+    if (!filePath || !existsSync(filePath)) return;
 
     try {
       const sop: SOP = JSON.parse(readFileSync(filePath, 'utf-8'));
@@ -373,8 +429,8 @@ export class RecipeEngine {
    * 更新调度策略
    */
   updateSchedule(name: string, scheduleUpdate: Partial<SOPSchedule>): SOP {
-    const filePath = join(RECIPES_DIR, `${name}.json`);
-    if (!existsSync(filePath)) {
+    const filePath = this._findFilePath(name);
+    if (!filePath || !existsSync(filePath)) {
       throw new Error(`找不到名为 "${name}" 的 SOP`);
     }
 
@@ -388,24 +444,110 @@ export class RecipeEngine {
     return sop;
   }
 
-  listSOPs(): SOP[] {
-    this.ensureDir();
-    const files = readdirSync(RECIPES_DIR).filter((f) => f.endsWith('.json'));
-    const list: SOP[] = [];
-    for (const file of files) {
-      try {
-        const content: SOP = JSON.parse(readFileSync(join(RECIPES_DIR, file), 'utf-8'));
-        list.push(content);
-      } catch (_) {}
+  /**
+   * 校验 SOP 结构完整性
+   */
+  validateSOP(sop: any): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+    if (!sop || typeof sop !== 'object') {
+      return { valid: false, errors: ['SOP 必须是一个 JSON 对象'] };
     }
-    return list;
+    if (!sop.name || typeof sop.name !== 'string') {
+      errors.push('缺少或非法的 "name" 字段');
+    }
+    if (!sop.version || typeof sop.version !== 'string') {
+      errors.push('缺少或非法的 "version" 字段');
+    }
+    if (!Array.isArray(sop.steps)) {
+      errors.push('"steps" 必须是一个数组');
+    } else {
+      sop.steps.forEach((step: any, idx: number) => {
+        if (!step.action) {
+          errors.push(`第 ${idx + 1} 步缺少 "action" 字段`);
+        }
+      });
+    }
+    return { valid: errors.length === 0, errors };
   }
 
-  listRecipes(): Array<{ name: string; version: string; description: string; stepCount: number; variables: string[]; frequency: string; runCount: number; createdAt: string }> {
+  /**
+   * 导出 SOP 为格式化 JSON 字符串
+   */
+  exportSOP(name: string): string {
+    const sop = this.getRecipe(name);
+    return JSON.stringify(sop, null, 2);
+  }
+
+  /**
+   * 导入 SOP（支持字符串或对象）
+   */
+  importSOP(sopInput: string | SOP, targetScope: 'global' | 'project' = 'global'): SOP {
+    let sop: SOP;
+    if (typeof sopInput === 'string') {
+      try {
+        sop = JSON.parse(sopInput);
+      } catch (err: any) {
+        throw new Error(`SOP 解析失败: ${err.message}`);
+      }
+    } else {
+      sop = sopInput;
+    }
+
+    const { valid, errors } = this.validateSOP(sop);
+    if (!valid) {
+      throw new Error(`SOP 校验失败: ${errors.join(', ')}`);
+    }
+
+    const targetDir = targetScope === 'project' ? this.localDir : this.globalDir;
+    if (!existsSync(targetDir)) {
+      mkdirSync(targetDir, { recursive: true });
+    }
+
+    sop.scope = targetScope;
+    sop.updatedAt = new Date().toISOString();
+    const filePath = join(targetDir, `${sop.name}.json`);
+    writeFileSync(filePath, JSON.stringify(sop, null, 2));
+
+    return sop;
+  }
+
+  listSOPs(): SOP[] {
+    this.ensureDir();
+    const map = new Map<string, SOP>();
+
+    // 1. 读取全局 SOP
+    if (existsSync(this.globalDir)) {
+      const gFiles = readdirSync(this.globalDir).filter((f) => f.endsWith('.json'));
+      for (const file of gFiles) {
+        try {
+          const content: SOP = JSON.parse(readFileSync(join(this.globalDir, file), 'utf-8'));
+          content.scope = 'global';
+          map.set(content.name, content);
+        } catch (_) {}
+      }
+    }
+
+    // 2. 读取项目本地 SOP（同名可覆盖全局显示）
+    if (existsSync(this.localDir)) {
+      const lFiles = readdirSync(this.localDir).filter((f) => f.endsWith('.json'));
+      for (const file of lFiles) {
+        try {
+          const content: SOP = JSON.parse(readFileSync(join(this.localDir, file), 'utf-8'));
+          content.scope = 'project';
+          map.set(content.name, content);
+        } catch (_) {}
+      }
+    }
+
+    return Array.from(map.values());
+  }
+
+  listRecipes(): Array<{ name: string; version: string; description: string; scope: string; stepCount: number; variables: string[]; frequency: string; runCount: number; createdAt: string }> {
     return this.listSOPs().map((sop) => ({
       name: sop.name,
       version: sop.version || '1.0.0',
       description: sop.description || '',
+      scope: sop.scope || 'global',
       stepCount: sop.stepCount || (sop.steps ? sop.steps.length : 0),
       variables: sop.variables || [],
       frequency: sop.schedule?.frequency || 'manual',
@@ -415,19 +557,31 @@ export class RecipeEngine {
   }
 
   getRecipe(name: string): SOP {
-    const filePath = join(RECIPES_DIR, `${name}.json`);
-    if (!existsSync(filePath)) {
+    const filePath = this._findFilePath(name);
+    if (!filePath || !existsSync(filePath)) {
       throw new Error(`找不到名为 "${name}" 的 SOP/Recipe`);
     }
-    return JSON.parse(readFileSync(filePath, 'utf-8'));
+    const sop: SOP = JSON.parse(readFileSync(filePath, 'utf-8'));
+    sop.scope = filePath.startsWith(this.localDir) ? 'project' : 'global';
+    return sop;
   }
 
   deleteRecipe(name: string): boolean {
-    const filePath = join(RECIPES_DIR, `${name}.json`);
-    if (existsSync(filePath)) {
+    const filePath = this._findFilePath(name);
+    if (filePath && existsSync(filePath)) {
       unlinkSync(filePath);
       return true;
     }
     return false;
+  }
+
+  private _findFilePath(name: string): string | null {
+    const localPath = join(this.localDir, `${name}.json`);
+    if (existsSync(localPath)) return localPath;
+
+    const globalPath = join(this.globalDir, `${name}.json`);
+    if (existsSync(globalPath)) return globalPath;
+
+    return null;
   }
 }

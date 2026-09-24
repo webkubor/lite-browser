@@ -26,11 +26,20 @@ export interface SessionState {
   wsUrl: string;
   targetId: string;
   url: string;
+  profile?: string;
   updatedAt: string;
 }
 
+export interface LaunchOptions {
+  headless?: boolean;
+  url?: string;
+  userDataDir?: string;
+  profile?: string;
+  port?: number;
+}
+
 export interface TrajectoryAction {
-  type: 'open' | 'click' | 'type' | 'scroll' | 'wait' | 'eval';
+  type: 'open' | 'click' | 'type' | 'scroll' | 'wait' | 'eval' | 'hover' | 'press' | 'select' | 'upload';
   target?: string;
   selector?: string;
   x?: number;
@@ -40,14 +49,18 @@ export interface TrajectoryAction {
   direction?: 'up' | 'down';
   amount?: number;
   seconds?: number;
+  key?: string;
+  value?: string;
+  files?: string[];
   targetDescription?: string;
   timestamp: number;
 }
 
 export interface RecipeStep {
   step: number;
-  action: 'open' | 'click' | 'type' | 'scroll' | 'wait';
+  action: 'open' | 'click' | 'type' | 'scroll' | 'wait' | 'hover' | 'press' | 'select' | 'upload' | 'eval';
   target?: string;
+  selector?: string;
   x?: number;
   y?: number;
   text?: string;
@@ -56,6 +69,9 @@ export interface RecipeStep {
   direction?: 'up' | 'down';
   amount?: number;
   seconds?: number;
+  key?: string;
+  value?: string;
+  files?: string[];
   description?: string;
 }
 
@@ -93,6 +109,7 @@ export interface SOP {
   name: string;
   version: string;
   description: string;
+  scope?: 'global' | 'project';
   match: SOPMatch;
   schedule: SOPSchedule;
   parameters: SOPParameter[];
