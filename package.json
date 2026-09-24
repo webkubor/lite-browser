@@ -1,0 +1,28 @@
+{
+  "name": "lite-browser",
+  "version": "0.1.0",
+  "description": "极致轻量、零常驻、毫秒级响应的自研浏览器操控工具，专为 AI Agent 与自动化设计",
+  "type": "module",
+  "bin": {
+    "lite-browser": "./bin/lite-browser"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "build": "bun build src/cli.ts --compile --outfile bin/lite-browser",
+    "test": "bun test"
+  },
+  "keywords": [
+    "browser-automation",
+    "cdp",
+    "ai-agent",
+    "lightweight",
+    "chrome",
+    "headless",
+    "bun"
+  ],
+  "license": "MIT",
+  "author": "webkubor",
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
