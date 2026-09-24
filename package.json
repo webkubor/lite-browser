@@ -14,11 +14,21 @@
   "keywords": [
     "browser-automation",
     "cdp",
+    "chrome-devtools-protocol",
     "ai-agent",
+    "mcp",
+    "model-context-protocol",
+    "sop",
+    "zero-daemon",
     "lightweight",
     "chrome",
     "headless",
-    "bun"
+    "bun",
+    "task-delegation",
+    "claude-desktop",
+    "cursor-plugin",
+    "browser-harness",
+    "devtools"
   ],
   "license": "MIT",
   "author": "webkubor",
