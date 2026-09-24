@@ -182,26 +182,33 @@ export class BrowserActions {
   async type(target: string, text: string): Promise<{ ok: boolean; target: string; text: string }> {
     const clickRes = await this.click(target);
 
+    // 先清空已有内容，避免重复追加
     await this.client.send('Runtime.evaluate', {
       expression: `(() => {
         const el = document.activeElement || document.querySelector(${JSON.stringify(clickRes.selector)});
         if (el) {
-          el.value = ${JSON.stringify(text)};
+          if ('select' in el && typeof el.select === 'function') {
+            el.select();
+          } else {
+            el.value = '';
+          }
+        }
+      })()`,
+    });
+
+    // 使用 CDP 原生 Input.insertText 插入文本（解决逐字符模拟与 value 赋值双重输入的 BUG）
+    await this.client.send('Input.insertText', { text });
+
+    // 确保 Vue / React 等双向绑定受控组件感知到变更
+    await this.client.send('Runtime.evaluate', {
+      expression: `(() => {
+        const el = document.activeElement || document.querySelector(${JSON.stringify(clickRes.selector)});
+        if (el) {
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
         }
       })()`,
     });
-
-    for (const char of text) {
-      await this.client.send('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        text: char,
-      });
-      await this.client.send('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-      });
-    }
 
     RecipeEngine.recordAction({
       type: 'type',
