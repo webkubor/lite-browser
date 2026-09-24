@@ -143,6 +143,27 @@ async function main() {
         break;
       }
 
+      case 'cdp': {
+        const method = args[1];
+        if (!method) {
+          console.error('❌ 请提供 CDP 方法名。例如: lite-browser cdp Page.getLayoutMetrics 或 lite-browser cdp Network.getCookies');
+          process.exit(1);
+        }
+        let params: Record<string, any> = {};
+        if (args[2]) {
+          try {
+            params = JSON.parse(args.slice(2).join(' '));
+          } catch (e: any) {
+            console.error(`❌ 参数必须是合法的 JSON 对象: ${e.message}`);
+            process.exit(1);
+          }
+        }
+        const browser = await BrowserActions.connectToSession();
+        const res = await browser.cdp(method, params);
+        console.log(JSON.stringify(res, null, 2));
+        break;
+      }
+
       case 'close': {
         const session = ChromeManager.getActiveSession();
         if (session) {

@@ -237,6 +237,10 @@ export class BrowserActions {
     return res.result.value;
   }
 
+  async cdp(method: string, params: Record<string, any> = {}): Promise<any> {
+    return await this.client.send(method, params);
+  }
+
   close(): void {
     this.client.close();
     ChromeManager.clearSession();
