@@ -59,11 +59,50 @@ export interface RecipeStep {
   description?: string;
 }
 
-export interface Recipe {
+export interface SOPMatch {
+  urlPatterns: string[];
+  intents: string[];
+  domains: string[];
+}
+
+export interface SOPSchedule {
+  frequency: 'manual' | 'daily' | 'weekly' | 'hourly' | string;
+  cron?: string;
+  lastRunAt?: string;
+  lastSuccessAt?: string;
+  runCount: number;
+  successCount: number;
+  failureCount: number;
+}
+
+export interface SOPParameter {
   name: string;
   description: string;
-  createdAt: string;
+  required: boolean;
+  default?: string;
+  example?: string;
+}
+
+export interface SOPChangelog {
+  version: string;
+  date: string;
+  reason: string;
+}
+
+export interface SOP {
+  name: string;
+  version: string;
+  description: string;
+  match: SOPMatch;
+  schedule: SOPSchedule;
+  parameters: SOPParameter[];
   stepCount: number;
   variables: string[];
   steps: RecipeStep[];
+  changelog: SOPChangelog[];
+  createdAt: string;
+  updatedAt: string;
 }
+
+// 兼容别名
+export type Recipe = SOP;

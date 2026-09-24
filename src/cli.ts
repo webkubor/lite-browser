@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * cli.ts —— lite-browser CLI 入口
- * 专为 AI Agent 与极速自动化设计的轻量级浏览器操控终端
+ * 专为 AI Agent 与极速自动化设计的轻量级浏览器操控终端 (1.0 MVP)
  */
 
 import { ChromeManager } from './chrome.js';
@@ -9,7 +9,7 @@ import { BrowserActions } from './actions.js';
 import { RecipeEngine } from './recipe.js';
 
 const USAGE = `
-🚀 lite-browser —— 极致轻量、零常驻、可沉淀的自研浏览器操控工具
+🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.0.0)
 
 基础操作:
   lite-browser open <url> [--headless]     打开网页并建立会话
@@ -22,20 +22,25 @@ const USAGE = `
   lite-browser eval "<code>"               在页面控制台执行 JavaScript
   lite-browser close                       断开连接并清理会话
 
-任务沉淀与自动化回放 (Recipe):
-  lite-browser done --name <recipe-name>   将本次成功的动作轨迹优化沉淀为 Recipe
-  lite-browser recipe list                 列出所有已沉淀的 Recipe
-  lite-browser recipe show <name>          查看指定 Recipe 的详情与步骤
-  lite-browser recipe run <name> [args]    高速确定性回放 Recipe（免模型思考，300ms直达）
-  lite-browser recipe delete <name>        删除指定 Recipe
+SOP 智能沉淀与自进化引擎:
+  lite-browser done --name <name> [flags]  沉淀轨迹为 SOP，若已存在则自动版本升级与自愈
+      [--desc <desc>]                      SOP 描述
+      [--intent <intent>]                  触发意图关键词（例如 "发布掘金"）
+      [--domain <domain>]                  适用主域名（例如 "juejin.cn"）
+      [--frequency <freq>]                 调度频次 (manual|daily|weekly|hourly)
+      [--cron <cron>]                      Cron 定时表达式
+      [--reason <reason>]                  本次修改/自愈原因说明
 
-示例:
-  lite-browser open https://www.baidu.com
-  lite-browser snapshot
-  lite-browser type @1 "CortexOS"
-  lite-browser click @2
-  lite-browser done --name "baidu-search"
-  lite-browser recipe run "baidu-search" --var input_1="广州天气"
+  lite-browser sop list                    列出全部 SOP、版本、执行频次与命中规则
+  lite-browser sop match <url|intent>      根据当前 URL 或任务意图智能匹配最适配的 SOP
+  lite-browser sop show <name>             查看指定 SOP 的完整元数组与步骤定义
+  lite-browser sop run <name> [args]       以确定性执行 SOP 并自动记录频次与成功率
+      [--var <key>=<val>]                  传入参数变量（如 --var input_1="我的文章"）
+  lite-browser sop schedule <name> [flags] 更新 SOP 的调度策略与频次
+  lite-browser sop delete <name>           删除指定 SOP
+
+兼容别名:
+  lite-browser recipe <list|show|run|delete> 等同于 lite-browser sop
 `;
 
 async function main() {
@@ -58,12 +63,10 @@ async function main() {
           process.exit(1);
         }
         const headless = args.includes('--headless');
-        console.log(`🌐 正在打开: ${url} (headless: ${headless})...`);
-        const mgr = new ChromeManager();
-        await mgr.getOrLaunch({ headless, url });
-        const browser = await BrowserActions.connectToSession();
-        const res = await browser.open(url);
-        console.log(`✅ 页面加载就绪: ${res.url}`);
+        console.log(`🌐 正在打开 ${url} (无头模式: ${headless ? '是' : '否'})...`);
+        const browser = await BrowserActions.launchOrConnect({ url, headless });
+        const title = await browser.getTitle();
+        console.log(`✅ 页面已就绪: "${title}" (${url})`);
         break;
       }
 
@@ -71,7 +74,7 @@ async function main() {
         const browser = await BrowserActions.connectToSession();
         const res = await browser.snapshot();
         if (args.includes('--json')) {
-          console.log(JSON.stringify(res.elements, null, 2));
+          console.log(JSON.stringify(res, null, 2));
         } else {
           console.log(res.formatted);
         }
@@ -81,12 +84,12 @@ async function main() {
       case 'click': {
         const target = args[1];
         if (!target) {
-          console.error('❌ 请指定点击目标。例如: lite-browser click @3 或 lite-browser click "#submit-btn"');
+          console.error('❌ 请指定要点击的目标。例如: lite-browser click @1 或 lite-browser click "button.submit"');
           process.exit(1);
         }
         const browser = await BrowserActions.connectToSession();
         const res = await browser.click(target);
-        console.log(`✅ 点击成功: ${res.target} (x:${res.x}, y:${res.y})`);
+        console.log(`✅ 点击成功: ${target} (x:${res.x}, y:${res.y})`);
         break;
       }
 
@@ -94,7 +97,7 @@ async function main() {
         const target = args[1];
         const text = args.slice(2).join(' ');
         if (!target || text === undefined) {
-          console.error('❌ 请指定目标与输入内容。例如: lite-browser type @2 "搜索关键词"');
+          console.error('❌ 参数不全。例如: lite-browser type @1 "Hello World"');
           process.exit(1);
         }
         const browser = await BrowserActions.connectToSession();
@@ -152,53 +155,114 @@ async function main() {
         break;
       }
 
-      // 任务沉淀指令
+      // 任务沉淀与自愈更新指令
       case 'done': {
         let name = '';
         let desc = '';
+        let intent = '';
+        let domain = '';
+        let frequency = 'manual';
+        let cron = '';
+        let reason = '';
+
         for (let i = 1; i < args.length; i++) {
           if (args[i] === '--name' && args[i + 1]) {
-            name = args[i + 1];
-            i++;
+            name = args[++i];
           } else if (args[i] === '--desc' && args[i + 1]) {
-            desc = args[i + 1];
-            i++;
+            desc = args[++i];
+          } else if (args[i] === '--intent' && args[i + 1]) {
+            intent = args[++i];
+          } else if (args[i] === '--domain' && args[i + 1]) {
+            domain = args[++i];
+          } else if (args[i] === '--frequency' && args[i + 1]) {
+            frequency = args[++i];
+          } else if (args[i] === '--cron' && args[i + 1]) {
+            cron = args[++i];
+          } else if (args[i] === '--reason' && args[i + 1]) {
+            reason = args[++i];
           }
         }
 
         if (!name) {
-          console.error('❌ 请为沉淀的任务指定名称。例如: lite-browser done --name "wechat-post"');
+          console.error('❌ 请为沉淀的任务指定名称。例如: lite-browser done --name "juejin-publish"');
           process.exit(1);
         }
 
-        const saved = recipeEngine.saveAndOptimize(name, desc);
-        console.log(`\n🎉 任务轨迹已成功沉淀并优化为 Recipe: "${saved.name}"`);
+        const saved = recipeEngine.saveOrUpdate({
+          name,
+          description: desc,
+          intent,
+          domain,
+          frequency,
+          cron,
+          reason,
+        });
+
+        console.log(`\n🎉 SOP "${saved.name}" (v${saved.version}) 沉淀/更新成功！`);
         console.log(`📝 步骤数量: ${saved.stepCount} 步`);
-        if (saved.variables.length > 0) {
-          console.log(`🔧 提取参数: ${saved.variables.map((v) => `{{${v}}}`).join(', ')}`);
+        console.log(`🔄 运行统计: 累计执行 ${saved.schedule?.runCount || 0} 次 (成功: ${saved.schedule?.successCount || 0})`);
+        if (saved.match) {
+          console.log(`🎯 匹配规则: [域名: ${saved.match.domains.join(', ') || '任意'}] [意图: ${saved.match.intents.join(', ') || '任意'}]`);
         }
-        console.log(`💡 下次可直接运行: lite-browser recipe run ${name}\n`);
+        if (saved.parameters && saved.parameters.length > 0) {
+          console.log(`🔧 动态参数: ${saved.parameters.map((p) => `{{${p.name}}}`).join(', ')}`);
+        }
+        console.log(`💡 下次可直接匹配或运行: lite-browser sop run ${name}\n`);
         break;
       }
 
-      // Recipe 子命令集
+      // SOP 与 Recipe 指令集
+      case 'sop':
       case 'recipe': {
         const sub = args[1];
-        if (sub === 'list') {
-          const list = recipeEngine.listRecipes();
-          console.log(`\n📦 已沉淀的 Recipe (${list.length} 个):`);
-          console.log('────────────────────────────────────────────────────────');
+        if (!sub || sub === 'list') {
+          const list = recipeEngine.listSOPs();
+          console.log(`\n📦 已沉淀的标准 SOP 列表 (${list.length} 个):`);
+          console.log('────────────────────────────────────────────────────────────────────────');
           for (const item of list) {
-            console.log(`• ${item.name.padEnd(20)} [${item.stepCount} 步] ${item.description}`);
-            if (item.variables.length > 0) {
-              console.log(`    参数: ${item.variables.join(', ')}`);
+            const v = item.version || '1.0.0';
+            const runs = `运行:${item.schedule?.runCount || 0}次 成功:${item.schedule?.successCount || 0}次`;
+            console.log(`• ${item.name.padEnd(20)} v${v.padEnd(6)} [${item.stepCount}步] [频次:${item.schedule?.frequency || 'manual'}] (${runs})`);
+            if (item.match && item.match.intents?.length > 0) {
+              console.log(`    🎯 意图: ${item.match.intents.join(', ')}`);
+            }
+            if (item.parameters && item.parameters.length > 0) {
+              console.log(`    🔧 参数: ${item.parameters.map((p) => p.name).join(', ')}`);
             }
           }
-          console.log('────────────────────────────────────────────────────────\n');
+          console.log('────────────────────────────────────────────────────────────────────────\n');
+        } else if (sub === 'match') {
+          const queryStr = args.slice(2).join(' ');
+          if (!queryStr) {
+            console.error('❌ 请提供匹配上下文。例如: lite-browser sop match "https://juejin.cn/editor" 或 lite-browser sop match "发布掘金"');
+            process.exit(1);
+          }
+
+          let url: string | undefined;
+          let intent: string | undefined;
+          let domain: string | undefined;
+
+          if (queryStr.startsWith('http://') || queryStr.startsWith('https://')) {
+            url = queryStr;
+            try {
+              domain = new URL(queryStr).hostname;
+            } catch (_) {}
+          } else {
+            intent = queryStr;
+          }
+
+          const res = recipeEngine.matchSOP({ url, intent, domain });
+          if (res.matched) {
+            console.log(`\n🎯 命中 SOP: "${res.matched.name}" (v${res.matched.version}) [置信度: ${res.score * 100}%]`);
+            console.log(`📝 匹配依据: ${res.reason}`);
+            console.log(`💡 可直接执行: lite-browser sop run ${res.matched.name}\n`);
+          } else {
+            console.log(`\n⚠️  未匹配到现成 SOP (${res.reason})，需要由 Agent 首次探索并用 lite-browser done 沉淀。\n`);
+          }
         } else if (sub === 'show') {
           const name = args[2];
           if (!name) {
-            console.error('❌ 请指定 Recipe 名称。例如: lite-browser recipe show "baidu-search"');
+            console.error('❌ 请指定 SOP 名称。例如: lite-browser sop show "juejin-publish"');
             process.exit(1);
           }
           const rec = recipeEngine.getRecipe(name);
@@ -206,15 +270,32 @@ async function main() {
         } else if (sub === 'delete') {
           const name = args[2];
           if (!name) {
-            console.error('❌ 请指定 Recipe 名称。');
+            console.error('❌ 请指定 SOP 名称。');
             process.exit(1);
           }
           recipeEngine.deleteRecipe(name);
-          console.log(`✅ 已删除 Recipe: ${name}`);
+          console.log(`✅ 已删除 SOP: ${name}`);
+        } else if (sub === 'schedule') {
+          const name = args[2];
+          if (!name) {
+            console.error('❌ 请指定 SOP 名称。例如: lite-browser sop schedule "juejin-publish" --frequency daily');
+            process.exit(1);
+          }
+          let freq = 'manual';
+          let cron: string | undefined;
+          for (let i = 3; i < args.length; i++) {
+            if (args[i] === '--frequency' && args[i + 1]) {
+              freq = args[++i];
+            } else if (args[i] === '--cron' && args[i + 1]) {
+              cron = args[++i];
+            }
+          }
+          const updated = recipeEngine.updateSchedule(name, { frequency: freq, cron });
+          console.log(`✅ SOP "${name}" 调度配置已更新: 频次=${updated.schedule.frequency}${cron ? ` (cron: ${cron})` : ''}`);
         } else if (sub === 'run') {
           const name = args[2];
           if (!name) {
-            console.error('❌ 请指定 Recipe 名称。例如: lite-browser recipe run "baidu-search"');
+            console.error('❌ 请指定 SOP 名称。例如: lite-browser sop run "juejin-publish"');
             process.exit(1);
           }
 
@@ -234,31 +315,39 @@ async function main() {
           }
 
           const rec = recipeEngine.getRecipe(name);
-          console.log(`⚡ 开始执行 Recipe "${name}" (${rec.stepCount} 步)...`);
+          console.log(`⚡ 开始执行 SOP "${name}" (v${rec.version || '1.0.0'}, ${rec.stepCount} 步)...`);
           const browser = await BrowserActions.connectToSession();
 
-          for (const step of rec.steps) {
-            console.log(`  [${step.step}/${rec.stepCount}] ${step.description || step.action}...`);
-            if (step.action === 'open' && step.url) {
-              await browser.open(step.url);
-            } else if (step.action === 'click' && step.target) {
-              await browser.click(step.target);
-            } else if (step.action === 'type' && step.target) {
-              let textToType = step.text || step.defaultText || '';
-              // 替换变量
-              for (const [k, v] of Object.entries(vars)) {
-                textToType = textToType.replaceAll(`{{${k}}}`, v);
+          try {
+            for (const step of rec.steps) {
+              console.log(`  [${step.step}/${rec.stepCount}] ${step.description || step.action}...`);
+              if (step.action === 'open' && step.url) {
+                await browser.open(step.url);
+              } else if (step.action === 'click' && step.target) {
+                await browser.click(step.target);
+              } else if (step.action === 'type' && step.target) {
+                let textToType = step.text || step.defaultText || '';
+                for (const [k, v] of Object.entries(vars)) {
+                  textToType = textToType.replaceAll(`{{${k}}}`, v);
+                }
+                await browser.type(step.target, textToType);
+              } else if (step.action === 'scroll') {
+                await browser.scroll(step.direction, step.amount);
+              } else if (step.action === 'wait') {
+                await browser.wait(step.seconds || 1);
               }
-              await browser.type(step.target, textToType);
-            } else if (step.action === 'scroll') {
-              await browser.scroll(step.direction, step.amount);
-            } else if (step.action === 'wait') {
-              await browser.wait(step.seconds || 1);
             }
+
+            recipeEngine.recordRun(name, true);
+            console.log(`\n🎉 SOP "${name}" 执行成功！(自动更新统计: 成功率+1)\n`);
+          } catch (execErr: any) {
+            recipeEngine.recordRun(name, false);
+            console.error(`\n❌ SOP "${name}" 在执行过程中出现异常: ${execErr.message}`);
+            console.log(`💡 提示: 可通过手动修正操作后执行 "lite-browser done --name ${name} --reason '修复某步骤'" 完成自愈更新。\n`);
+            process.exit(1);
           }
-          console.log(`\n🎉 Recipe "${name}" 执行完成！(确定性直达，零大模型开销)\n`);
         } else {
-          console.error(`❌ 未知 recipe 子命令: ${sub}。支持: list, show, run, delete`);
+          console.error(`❌ 未知 sop 子命令: ${sub}。支持: list, match, show, run, schedule, delete`);
         }
         break;
       }
