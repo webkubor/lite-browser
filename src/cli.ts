@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * cli.ts —— lite-browser CLI 入口
- * 专为 AI Agent 与极速自动化设计的轻量级浏览器操控终端 (v1.1.0)
+ * 专为 AI Agent 与极速自动化设计的轻量级浏览器操控终端 (v1.1.1)
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { CookieManager } from './cookie.js';
 import { McpServer } from './mcp.js';
 
 const USAGE = `
-🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.1.0)
+🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.1.1)
 
 基础操作:
   lite-browser open <url> [flags]          打开网页建立会话 (默认有头，支持持久化 profile)
