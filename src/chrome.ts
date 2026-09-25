@@ -22,8 +22,38 @@ export class ChromeManager {
     this.registry = new SessionRegistry();
   }
 
+  /**
+   * 挑一个 Chromium 系浏览器来驱动。
+   *
+   * **ego lite 排在 Google Chrome 前面**，这是刻意的：lite-browser 拉起的实例会在
+   * Dock 里多出一个图标，而它和用户自己那个 Chrome **图标一模一样**，分不清哪个窗口
+   * 是 agent 在用、哪个是人在用（owner 2026-09-25 的原话：「我现在本地开好几个
+   * Chrome，那个 Chrome 图标都一模一样的」）。
+   *
+   * 试过给 Chrome 做换图标的 .app 包装，两种都不行：`exec` 转发后进程归属跟着真
+   * Chrome 的 bundle 走，Dock 图标不变；软链式副本会让 Chrome Helper 加载 Framework
+   * 时被 sandbox 拦死（`dlopen ... file system sandbox blocked open()`）。要真换图标
+   * 只能整包复制 600MB 再重签名，不值当。
+   *
+   * 换个浏览器就白拿这件事：ego lite 本机已装（Chromium 152 内核，实测
+   * `--remote-debugging-port` 完全可用），图标是黑白椭圆，和 Chrome 的彩色圆一眼区分，
+   * 且 agent 的浏览数据与用户自己的 Chrome 彻底隔离。零新增体积。
+   *
+   * 要强制指定浏览器（换 Brave / 换回 Chrome / CI 里指到别处）：设环境变量
+   * `LITE_BROWSER_BROWSER=<可执行文件绝对路径>`。
+   */
   static getChromePath(): string {
+    const override = process.env.LITE_BROWSER_BROWSER;
+    if (override) {
+      if (!existsSync(override)) {
+        throw new Error(`LITE_BROWSER_BROWSER 指向的文件不存在：${override}`);
+      }
+      return override;
+    }
+
     const paths = [
+      '/Applications/ego lite.app/Contents/MacOS/ego lite',
+      `${homedir()}/Applications/ego lite.app/Contents/MacOS/ego lite`,
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       `${homedir()}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
       '/Applications/Chromium.app/Contents/MacOS/Chromium',
@@ -34,7 +64,7 @@ export class ChromeManager {
     for (const p of paths) {
       if (existsSync(p)) return p;
     }
-    throw new Error('未在系统找到 Google Chrome / Chromium，请确认已安装。');
+    throw new Error('未在系统找到 ego lite / Google Chrome / Chromium，请确认已安装。');
   }
 
   async checkPort(): Promise<any | null> {
