@@ -207,8 +207,10 @@ export class SessionRegistry {
   remove(agentOrPort: string | number): void {
     const all = this.getAll();
     const filtered = all.filter((r) => {
-      if (typeof agentOrPort === 'number') return r.port !== agentOrPort;
-      return r.agent.toLowerCase() !== agentOrPort.toLowerCase();
+      if (typeof agentOrPort === 'number' || !isNaN(Number(agentOrPort))) {
+        return r.port !== Number(agentOrPort);
+      }
+      return r.agent.toLowerCase() !== String(agentOrPort).toLowerCase();
     });
     writeFileSync(REGISTRY_FILE, JSON.stringify(filtered, null, 2));
   }

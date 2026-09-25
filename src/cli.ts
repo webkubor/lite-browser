@@ -14,7 +14,7 @@ import { McpServer } from './mcp.js';
 import { SessionRegistry } from './registry.js';
 
 const USAGE = `
-🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.1.1)
+🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.2.0)
 
 基础操作:
   lite-browser open <url> [flags]          打开网页建立会话 (默认有头，支持持久化 profile)
@@ -34,6 +34,13 @@ const USAGE = `
   lite-browser eval "<code>"               在页面控制台执行 JavaScript
   lite-browser cdp <method> [jsonParams]   向 Chrome 发送底层 CDP 协议命令
   lite-browser close                       断开连接并清理会话
+
+多 Agent 身份感知、端口隔离与免登录复用:
+  lite-browser whoami                      诊断当前调用 Agent 身份、关联端口、Profile 与登录域
+  lite-browser session list                列出所有注册的 Agent 会话、端口、PID 与登录域
+  lite-browser session clean               检测并清理已退出的失效/离线会话
+  lite-browser session remove <agent|port> 从注册表中移除指定 Agent 或端口记录
+  lite-browser session mark-login <domain> 为当前会话显式标记已登录平台域名
 
 SOP 智能沉淀、自进化与团队共享:
   lite-browser done --name <name> [flags]  沉淀轨迹为 SOP，若已存在则自动版本升级与自愈
@@ -73,10 +80,32 @@ Cookie 与 Profile 管理:
 
 AI 插件化扩展服务:
   lite-browser mcp                         启动 Model Context Protocol (MCP) STDIO 服务
+
+全局参数修饰 (可在任意命令中附加):
+  [--agent <name>]                         显式指定当前调用 Agent 身份 (如 gemini, claude-code, codex)
+  [--port <number>]                        显式绑定指定 CDP 调试端口
+  [--reuse]                                跨 Agent 智能复用已有该域名登录态的会话 (免扫码重复登录)
 `;
 
 async function main() {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  let explicitAgent: string | undefined;
+  let explicitPort: number | undefined;
+  let reuse = false;
+
+  const args: string[] = [];
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === '--agent' && rawArgs[i + 1]) {
+      explicitAgent = rawArgs[++i];
+    } else if (rawArgs[i] === '--port' && rawArgs[i + 1]) {
+      explicitPort = parseInt(rawArgs[++i], 10);
+    } else if (rawArgs[i] === '--reuse') {
+      reuse = true;
+    } else {
+      args.push(rawArgs[i]);
+    }
+  }
+
   const command = args[0];
 
   if (!command || command === '-h' || command === '--help') {
@@ -86,6 +115,10 @@ async function main() {
 
   const recipeEngine = new RecipeEngine();
   const taskEngine = new TaskEngine();
+
+  const getSessionClient = async () => {
+    return await BrowserActions.connectToSession(explicitPort || explicitAgent);
+  };
 
   try {
     switch (command) {
@@ -107,6 +140,34 @@ async function main() {
         return;
       }
 
+      // Agent 身份诊断与会话洞察
+      case 'whoami': {
+        const detectedAgent = SessionRegistry.detectCurrentAgent(explicitAgent);
+        const registry = new SessionRegistry();
+        const session = ChromeManager.getActiveSession(explicitPort || detectedAgent);
+
+        console.log(`\n🤖 lite-browser Agent 调用者身份诊断:`);
+        console.log('────────────────────────────────────────────────────────────────────');
+        console.log(`  调用者标识 (Agent)   : ${detectedAgent} ${explicitAgent ? '(CLI --agent 显式指定)' : '(环境感知探测)'}`);
+        if (session) {
+          const isAlive = await registry.pingPort(session.port);
+          console.log(`  关联浏览器会话       : ✅ 活跃中 (PID: ${session.pid || '已接管'})`);
+          console.log(`  CDP 调试端口 (Port)  : ${session.port}`);
+          console.log(`  Profile 配置目录     : ${session.profile}`);
+          console.log(`  当前页面标题         : "${session.title || '未知'}"`);
+          console.log(`  当前页面 URL         : ${session.url}`);
+          console.log(`  已记录登录域 (Domains: ${(session.loginDomains && session.loginDomains.length > 0) ? session.loginDomains.join(', ') : '无'}`);
+          console.log(`  端口连通性检测       : ${isAlive ? '🟢 畅通' : '🔴 离线'}`);
+          console.log(`  最后活跃时间         : ${session.updatedAt}`);
+        } else {
+          console.log(`  关联浏览器会话       : ⚠️  当前无活跃绑定会话`);
+          console.log(`  推荐隔离端口         : ${await registry.allocatePort(detectedAgent)}`);
+          console.log(`  提示                 : 执行 \`lite-browser open <url> --agent ${detectedAgent}\` 启动专属会话`);
+        }
+        console.log('────────────────────────────────────────────────────────────────────\n');
+        break;
+      }
+
       case 'open': {
         const url = args[1];
         if (!url) {
@@ -121,19 +182,25 @@ async function main() {
           profile = args[profIdx + 1];
         }
 
-        const agentIdx = args.indexOf('--agent');
-        const agent = agentIdx >= 0 ? args[agentIdx + 1] : undefined;
-        const reuse = args.includes('--reuse');
+        const agent = SessionRegistry.detectCurrentAgent(explicitAgent);
 
-        console.log(`🌐 正在打开 ${url} (无头模式: ${headless ? '是' : '否'}, Profile: ${temp ? '临时' : profile}${agent ? `, Agent: ${agent}` : ''}${reuse ? ', 智能复用: 是' : ''})...`);
-        const browser = await BrowserActions.launchOrConnect({ url, headless, profile, temp, agent, reuse });
+        console.log(`🌐 正在打开 ${url} (模式: ${headless ? '无头' : '有头'}, Profile: ${temp ? '临时' : profile}, Agent: ${agent}${reuse ? ', 智能复用: 是' : ''})...`);
+        const browser = await BrowserActions.launchOrConnect({
+          url,
+          headless,
+          profile,
+          temp,
+          port: explicitPort,
+          agent: explicitAgent,
+          reuse,
+        });
         const title = await browser.getTitle();
         console.log(`✅ 页面已就绪: "${title}" (${url})`);
         break;
       }
 
       case 'snapshot': {
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         const res = await browser.snapshot();
         if (args.includes('--json')) {
           console.log(JSON.stringify(res, null, 2));
@@ -149,7 +216,7 @@ async function main() {
           console.error('❌ 请指定要点击的目标。例如: lite-browser click @1 或 lite-browser click "button.submit"');
           process.exit(1);
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         const res = await browser.click(target);
         console.log(`✅ 点击成功: ${target} (x:${res.x}, y:${res.y})`);
         break;
@@ -162,7 +229,7 @@ async function main() {
           console.error('❌ 参数不全。例如: lite-browser type @1 "Hello World"');
           process.exit(1);
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         await browser.type(target, text);
         console.log(`✅ 文本输入成功: ${target} → "${text}"`);
         break;
@@ -174,7 +241,7 @@ async function main() {
           console.error('❌ 请指定要悬停的目标。例如: lite-browser hover @1');
           process.exit(1);
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         const res = await browser.hover(target);
         console.log(`✅ 悬停成功: ${target} (x:${res.x}, y:${res.y})`);
         break;
@@ -186,7 +253,7 @@ async function main() {
           console.error('❌ 请指定要按下的按键。例如: lite-browser press Enter');
           process.exit(1);
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         await browser.press(key);
         console.log(`✅ 按键已触发: ${key}`);
         break;
@@ -199,7 +266,7 @@ async function main() {
           console.error('❌ 参数不全。例如: lite-browser select @1 "option_value"');
           process.exit(1);
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         await browser.select(target, value);
         console.log(`✅ 下拉选取完成: ${target} → "${value}"`);
         break;
@@ -212,7 +279,7 @@ async function main() {
           console.error('❌ 参数不全。例如: lite-browser upload @1 /path/to/file.png');
           process.exit(1);
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         await browser.upload(target, files);
         console.log(`✅ 文件上传设置完成: ${files.join(', ')} → ${target}`);
         break;
@@ -221,7 +288,7 @@ async function main() {
       case 'scroll': {
         const direction = (args[1] === 'up' ? 'up' : 'down') as 'up' | 'down';
         const amount = parseInt(args[2] || '400', 10);
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         await browser.scroll(direction, amount);
         console.log(`✅ 页面滚动完成: ${direction} ${amount}px`);
         break;
@@ -229,7 +296,7 @@ async function main() {
 
       case 'wait': {
         const seconds = parseFloat(args[1] || '1');
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         await browser.wait(seconds);
         console.log(`✅ 等待完成: ${seconds} 秒`);
         break;
@@ -237,7 +304,7 @@ async function main() {
 
       case 'screenshot': {
         const path = args[1] || `/tmp/lite-browser-${Date.now()}.png`;
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         const res = await browser.screenshot(path);
         console.log(`📸 截图已保存 (${(res.size / 1024).toFixed(1)} KB): ${res.path}`);
         break;
@@ -249,7 +316,7 @@ async function main() {
           console.error('❌ 请提供要执行的 JavaScript 表达式。');
           process.exit(1);
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         const res = await browser.eval(code);
         console.log(res);
         break;
@@ -270,18 +337,21 @@ async function main() {
             process.exit(1);
           }
         }
-        const browser = await BrowserActions.connectToSession();
+        const browser = await getSessionClient();
         const res = await browser.cdp(method, params);
         console.log(JSON.stringify(res, null, 2));
         break;
       }
 
       case 'close': {
-        const session = ChromeManager.getActiveSession();
+        const session = ChromeManager.getActiveSession(explicitPort || explicitAgent);
         if (session) {
-          const browser = await BrowserActions.connectToSession();
-          browser.close();
-          console.log('✅ 会话已关闭，连接已清理');
+          try {
+            const browser = await getSessionClient();
+            browser.close();
+          } catch (_) {}
+          ChromeManager.clearSession(explicitPort || explicitAgent);
+          console.log(`✅ 会话已关闭，连接已清理 (Agent/Port: ${explicitPort || explicitAgent || session.agent})`);
         } else {
           console.log('💡 当前无活跃会话');
         }
@@ -499,7 +569,12 @@ async function main() {
 
           const rec = recipeEngine.getRecipe(name);
           console.log(`⚡ 开始执行 SOP "${name}" (v${rec.version || '1.0.0'}, ${rec.stepCount} 步)...`);
-          const browser = await BrowserActions.launchOrConnect({ headless });
+          const browser = await BrowserActions.launchOrConnect({
+            headless,
+            port: explicitPort,
+            agent: explicitAgent,
+            reuse,
+          });
 
           try {
             for (const step of rec.steps) {
@@ -670,24 +745,49 @@ async function main() {
 
       // Session 多租户与 Agent 会话管理指令
       case 'session': {
-        const sub = args[1];
+        const sub = args[1] || 'list';
         const registry = new SessionRegistry();
-        if (!sub || sub === 'list') {
+        if (sub === 'list') {
           const sessions = registry.getAll();
-          console.log(`\n🌐 当前注册的所有 Agent 会话 (${sessions.length} 个):`);
+          console.log(`\n🌐 lite-browser 多 Agent 会话注册表 (${sessions.length} 个):`);
           console.log('────────────────────────────────────────────────────────────────────────────────────────');
           for (const s of sessions) {
-            const statusIcon = s.status === 'active' ? '🟢 活跃' : '⚪ 已关闭';
+            const isAlive = await registry.pingPort(s.port);
+            const statusIcon = isAlive ? '🟢 活跃' : '⚪ 已离线';
             const domains = s.loginDomains && s.loginDomains.length > 0 ? s.loginDomains.join(', ') : '无';
-            console.log(`• [${s.agent.padEnd(12)}] 端口:${s.port} ${statusIcon} (PID:${s.pid || '-'}) 登录域: [${domains}]`);
-            if (s.url) console.log(`    URL: ${s.url}`);
+            console.log(`• [${s.agent.padEnd(12)}] 端口:${s.port} ${statusIcon} (PID:${s.pid || '-'}) Profile:${s.profile}`);
+            console.log(`    登录域: [${domains}]`);
+            if (s.url) console.log(`    URL   : ${s.url}`);
+            if (s.title) console.log(`    标题  : "${s.title}"`);
           }
           console.log('────────────────────────────────────────────────────────────────────────────────────────\n');
         } else if (sub === 'clean') {
+          console.log('🧹 正在检测并清理已退出的失效会话...');
           const res = await registry.cleanDeadSessions();
-          console.log(`✅ 已清理 ${res.cleaned} 个失效会话，当前活跃会话: ${res.active} 个`);
+          console.log(`✅ 清理完成: 已标记失效 ${res.cleaned} 个，当前存活会话: ${res.active} 个`);
+        } else if (sub === 'remove') {
+          const target = args[2];
+          if (!target) {
+            console.error('❌ 请指定要移除的 Agent 名称或端口。例如: lite-browser session remove gemini 或 9222');
+            process.exit(1);
+          }
+          registry.remove(target);
+          console.log(`✅ 已从注册表中移除会话记录: ${target}`);
+        } else if (sub === 'mark-login') {
+          const domain = args[2];
+          if (!domain) {
+            console.error('❌ 请指定已登录的主域名。例如: lite-browser session mark-login juejin.cn');
+            process.exit(1);
+          }
+          const session = ChromeManager.getActiveSession(explicitPort || explicitAgent);
+          if (!session) {
+            console.error('❌ 未找到活跃会话，无法标记登录态。请先执行 open 建立会话。');
+            process.exit(1);
+          }
+          registry.registerLoginDomain(session.port, domain);
+          console.log(`✅ 已为端口 ${session.port} (${session.agent}) 登记登录域名: ${domain}`);
         } else {
-          console.error(`❌ 未知 session 子命令: ${sub}。支持: list, clean`);
+          console.error(`❌ 未知 session 子命令: ${sub}。支持: list, clean, remove, mark-login`);
         }
         break;
       }

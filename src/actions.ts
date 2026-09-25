@@ -7,7 +7,7 @@ import { CdpClient } from './cdp.js';
 import { ChromeManager } from './chrome.js';
 import { INJECTED_DOM_SCRIPT, formatSnapshot } from './dom.js';
 import { RecipeEngine } from './recipe.js';
-import type { InteractiveElement, SnapshotResult } from './types.js';
+import type { InteractiveElement, LaunchOptions, SnapshotResult } from './types.js';
 
 export class BrowserActions {
   public client: CdpClient;

@@ -68,7 +68,7 @@ export class ChromeManager {
               targetPage = await this.newPage(url);
             }
             const reusedSession: SessionState = {
-              agent: reusable.agent,
+              agent,
               port: reusable.port,
               pid: reusable.pid,
               wsUrl: targetPage.webSocketDebuggerUrl,
@@ -76,20 +76,21 @@ export class ChromeManager {
               url: targetPage.url,
               title: targetPage.title || '',
               profile: reusable.profile,
-              loginDomains: reusable.loginDomains || [],
+              loginDomains: Array.from(new Set([...(reusable.loginDomains || []), domain])),
               status: 'active',
               createdAt: reusable.createdAt,
               updatedAt: new Date().toISOString(),
             };
             writeFileSync(SESSION_FILE, JSON.stringify(reusedSession, null, 2));
+            this.registry.save(reusedSession);
             return reusedSession;
           }
         }
       }
     }
 
-    // 若未显式传入固定端口，且显式指定了 Agent，则从注册表按 Agent 隔离端口
-    if (this.port === DEFAULT_PORT && explicitAgent) {
+    // 若未显式传入固定端口，且显式指定了 Agent 或当前为独立 Agent 环境，则从注册表按 Agent 隔离端口
+    if (this.port === DEFAULT_PORT && (explicitAgent || agent !== 'default')) {
       this.port = await this.registry.allocatePort(agent);
     }
 
@@ -196,12 +197,13 @@ export class ChromeManager {
 
   static getActiveSession(agentOrPort?: string | number): SessionState | null {
     const registry = new SessionRegistry();
-    if (agentOrPort) {
-      if (typeof agentOrPort === 'number' || !isNaN(Number(agentOrPort))) {
-        const found = registry.getByPort(Number(agentOrPort));
+    const effective = agentOrPort || SessionRegistry.detectCurrentAgent();
+    if (effective) {
+      if (typeof effective === 'number' || !isNaN(Number(effective))) {
+        const found = registry.getByPort(Number(effective));
         if (found) return found;
       } else {
-        const found = registry.getByAgent(String(agentOrPort));
+        const found = registry.getByAgent(String(effective));
         if (found) return found;
       }
     }

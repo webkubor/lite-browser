@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v1.2.0 (2026-09-25)
+
+**核心突破：多 Agent 身份感知隔离 + 跨 Agent 凭据与登录态智能复用 (免重复扫码) + 全景诊断工具**
+
+### 🤖 多 Agent 身份感知与端口隔离 (Multi-Agent Tenancy)
+- **调用者身份感知**：新增 `SessionRegistry.detectCurrentAgent()`，支持从 `--agent <name>` 显式参数、环境变量（`LITE_BROWSER_AGENT`, `ANTIGRAVITY_AGENT`, `CLAUDE_CODE`, `CODEX`, `HERMES`）自动识别调用者身份。
+- **端口与 Profile 专属隔离**：为不同 Agent 自动分配独立调试端口（9222, 9223...）与独立 Profile 存储目录（`~/.lite-browser/profiles/agent-<name>`），杜绝 Claude Code 与 Gemini 等多 Agent 并行执行时的端口抢占与数据覆盖。
+
+### 🔑 跨 Agent 凭据与登录态智能复用 (--reuse)
+- **免扫码零重复登录**：新增 `--reuse` 标志与 `registry.findByDomain()` 机制。任意 Agent 只要在某平台（如稀土掘金、小红书、GitHub）登录过，后续任意 Agent 均可携带 `--reuse` 直接接管已有登录态与 Cookie，彻底告别重复弹码。
+- **平台登录域自动注册**：会话在导航与交互过程中自动提取主域名并关联至 `session-registry.json`，亦可通过 `lite-browser session mark-login <domain>` 手动标记。
+
+### 📋 全景会话诊断与注册表运维
+- **身份与状态自省 (`whoami`)**：新增 `lite-browser whoami` 指令，输出当前 Agent 身份、CDP 端口、Profile 路径、活跃页面标题/URL、关联登录域及实时端口连通性。
+- **多会话注册中心管理 (`session`)**：
+  - `session list`：实时表格化展示所有注册 Agent 会话及其在线状态。
+  - `session clean`：检测并标记清理失效离线会话。
+  - `session remove <agent|port>`：移除指定会话记录。
+  - `session mark-login <domain>`：显式标记登录域名。
+
+---
+
 ## v1.1.1 (2026-09-25)
 
 ### 🐛 缺陷修复与稳定性增强 (Bug Fixes & Hardening)
