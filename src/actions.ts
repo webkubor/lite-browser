@@ -7,14 +7,17 @@ import { CdpClient } from './cdp.js';
 import { ChromeManager } from './chrome.js';
 import { INJECTED_DOM_SCRIPT, formatSnapshot } from './dom.js';
 import { RecipeEngine } from './recipe.js';
+import { SessionRegistry } from './registry.js';
 import type { InteractiveElement, LaunchOptions, SnapshotResult } from './types.js';
 
 export class BrowserActions {
   public client: CdpClient;
   public cachedElements: InteractiveElement[] = [];
+  public agent?: string;
 
-  constructor(client: CdpClient) {
+  constructor(client: CdpClient, agent?: string) {
     this.client = client;
+    this.agent = agent;
   }
 
   static async launchOrConnect(options: LaunchOptions & { temp?: boolean } = {}): Promise<BrowserActions> {
@@ -22,9 +25,11 @@ export class BrowserActions {
     const session = await mgr.getOrLaunch(options);
     const client = new CdpClient(session.wsUrl);
     await client.connect();
-    const browser = new BrowserActions(client);
+    const browser = new BrowserActions(client, session.agent || options.agent);
     if (options.url && options.url !== 'about:blank' && session.url !== options.url) {
       await browser.open(options.url);
+    } else {
+      await browser.applyTitleBadge();
     }
     return browser;
   }
@@ -34,9 +39,82 @@ export class BrowserActions {
     if (!session || !session.wsUrl) {
       throw new Error(`未找到活跃的浏览器会话${agentOrPort ? ` (Agent/Port: ${agentOrPort})` : ''}。请先执行 \`lite-browser open <url>\` 建立会话。`);
     }
-    const client = new CdpClient(session.wsUrl);
-    await client.connect();
-    return new BrowserActions(client);
+
+    try {
+      const client = new CdpClient(session.wsUrl);
+      await client.connect();
+      return new BrowserActions(client, session.agent);
+    } catch (_) {
+      // 若原 targetId 标签已关闭或重定向，从该端口当前存活的 pages 中自愈重连
+      const mgr = new ChromeManager(session.port);
+      const pages = await mgr.getPages().catch(() => []);
+      const activePage = pages.find((p: any) => p.type === 'page' && p.webSocketDebuggerUrl);
+      if (activePage) {
+        session.wsUrl = activePage.webSocketDebuggerUrl;
+        session.targetId = activePage.id;
+        session.url = activePage.url;
+        session.title = activePage.title;
+        ChromeManager.updateSessionUrl(activePage.url, activePage.title);
+        const client = new CdpClient(activePage.webSocketDebuggerUrl);
+        await client.connect();
+        return new BrowserActions(client, session.agent);
+      }
+      throw new Error(`浏览器会话已失效 (Port: ${session.port})。请重新执行 \`lite-browser open <url>\`。`);
+    }
+  }
+
+  getBadgePrefix(): string {
+    const customBadge = process.env.LITE_BROWSER_BADGE;
+    if (customBadge) return customBadge.endsWith(' ') ? customBadge : customBadge + ' ';
+    const effectiveAgent = this.agent || SessionRegistry.detectCurrentAgent();
+    if (effectiveAgent && effectiveAgent !== 'default') {
+      return `⚡ [lite:${effectiveAgent}] `;
+    }
+    return '⚡ [lite] ';
+  }
+
+  async applyTitleBadge(): Promise<void> {
+    const badge = this.getBadgePrefix();
+    const script = `(() => {
+      const badge = ${JSON.stringify(badge)};
+      function patch() {
+        try {
+          const proto = HTMLDocument.prototype.hasOwnProperty('title') ? HTMLDocument.prototype : Document.prototype;
+          const desc = Object.getOwnPropertyDescriptor(proto, 'title');
+          if (desc && desc.set && !desc.set.__lite_patched) {
+            const origSet = desc.set;
+            const newSet = function(val) {
+              const str = String(val || '');
+              const prefixed = str.startsWith('⚡ [lite') ? str : badge + str;
+              return origSet.call(this, prefixed);
+            };
+            newSet.__lite_patched = true;
+            desc.set = newSet;
+            Object.defineProperty(proto, 'title', desc);
+          }
+        } catch (_) {}
+        if (document.title && !document.title.startsWith('⚡ [lite')) {
+          document.title = badge + document.title;
+        }
+      }
+      patch();
+      const target = document.querySelector('title');
+      if (target && !target.__lite_observed) {
+        target.__lite_observed = true;
+        new MutationObserver(() => {
+          if (document.title && !document.title.startsWith('⚡ [lite')) {
+            document.title = badge + document.title;
+          }
+        }).observe(target, { childList: true, characterData: true, subtree: true });
+      }
+    })()`;
+
+    try {
+      await this.client.send('Page.enable');
+      await this.client.send('Runtime.enable');
+      await this.client.send('Page.addScriptToEvaluateOnNewDocument', { source: script });
+      await this.client.send('Runtime.evaluate', { expression: script });
+    } catch (_) {}
   }
 
   async open(url: string): Promise<{ ok: boolean; url: string }> {
@@ -53,7 +131,10 @@ export class BrowserActions {
     await this.client.send('Page.navigate', { url: targetUrl });
     await navPromise;
 
-    ChromeManager.updateSessionUrl(targetUrl);
+    await this.applyTitleBadge();
+    const currentTitle = await this.getTitle();
+
+    ChromeManager.updateSessionUrl(targetUrl, currentTitle);
 
     RecipeEngine.recordAction({
       type: 'open',

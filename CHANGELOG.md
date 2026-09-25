@@ -12,6 +12,10 @@
 - **免扫码零重复登录**：新增 `--reuse` 标志与 `registry.findByDomain()` 机制。任意 Agent 只要在某平台（如稀土掘金、小红书、GitHub）登录过，后续任意 Agent 均可携带 `--reuse` 直接接管已有登录态与 Cookie，彻底告别重复弹码。
 - **平台登录域自动注册**：会话在导航与交互过程中自动提取主域名并关联至 `session-registry.json`，亦可通过 `lite-browser session mark-login <domain>` 手动标记。
 
+### ⚡ 特质性闪电徽章与 Tab 自愈 (Title Badge & Self-Healing)
+- **极具辨识度的闪电标识**：浏览器打开或操控网页时，Tab 标题自动注入 `⚡ [lite:<agent>] 原标题`（例如 `⚡ [lite:gemini] 稀土掘金`），并由 `Page.addScriptToEvaluateOnNewDocument` 与 title setter 劫持技术确保 SPA 动态路由切换后徽章依然持久驻留。
+- **失效 Tab 自动重连自愈**：若原调试 Tab 被关闭，`connectToSession` 自动扫描当前端口存活有效 Page 并就地自愈重连，避免报错。
+
 ### 📋 全景会话诊断与注册表运维
 - **身份与状态自省 (`whoami`)**：新增 `lite-browser whoami` 指令，输出当前 Agent 身份、CDP 端口、Profile 路径、活跃页面标题/URL、关联登录域及实时端口连通性。
 - **多会话注册中心管理 (`session`)**：

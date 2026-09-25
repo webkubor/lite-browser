@@ -61,11 +61,11 @@ describe('SessionRegistry & Multi-Agent Identity Isolation', () => {
       port: 9888,
       pid: 1111,
       profile: 'agent-gemini-tester',
-      url: 'https://juejin.cn/creator',
+      url: 'https://mock-domain-a.com/creator',
       title: '创作者中心',
       targetId: 'target-1',
       wsUrl: 'ws://127.0.0.1:9888/devtools/page/1',
-      loginDomains: ['juejin.cn'],
+      loginDomains: ['mock-domain-a.com'],
       status: 'active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -76,11 +76,11 @@ describe('SessionRegistry & Multi-Agent Identity Isolation', () => {
       port: 9889,
       pid: 2222,
       profile: 'agent-claude-tester',
-      url: 'https://github.com',
+      url: 'https://mock-domain-b.com',
       title: 'GitHub',
       targetId: 'target-2',
       wsUrl: 'ws://127.0.0.1:9889/devtools/page/2',
-      loginDomains: ['github.com'],
+      loginDomains: ['mock-domain-b.com'],
       status: 'active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -92,21 +92,21 @@ describe('SessionRegistry & Multi-Agent Identity Isolation', () => {
     const queriedA = registry.getByAgent('gemini-tester');
     expect(queriedA).not.toBeNull();
     expect(queriedA?.port).toBe(9888);
-    expect(queriedA?.loginDomains).toContain('juejin.cn');
+    expect(queriedA?.loginDomains).toContain('mock-domain-a.com');
 
     const queriedB = registry.getByAgent('claude-tester');
     expect(queriedB).not.toBeNull();
     expect(queriedB?.port).toBe(9889);
-    expect(queriedB?.loginDomains).toContain('github.com');
+    expect(queriedB?.loginDomains).toContain('mock-domain-b.com');
   });
 
   it('should find sessions with reusable domain login state', () => {
-    const found = registry.findByDomain('juejin.cn');
+    const found = registry.findByDomain('mock-domain-a.com');
     expect(found).not.toBeNull();
     expect(found?.agent).toBe('gemini-tester');
     expect(found?.port).toBe(9888);
 
-    const foundByFullUrl = registry.findByDomain('https://juejin.cn/post/123456');
+    const foundByFullUrl = registry.findByDomain('https://mock-domain-a.com/post/123456');
     expect(foundByFullUrl).not.toBeNull();
     expect(foundByFullUrl?.agent).toBe('gemini-tester');
 
@@ -115,9 +115,9 @@ describe('SessionRegistry & Multi-Agent Identity Isolation', () => {
   });
 
   it('should append login domains via registerLoginDomain', () => {
-    registry.registerLoginDomain(9888, 'https://juejin.im');
+    registry.registerLoginDomain(9888, 'https://mock-extra-domain.im');
     const updated = registry.getByPort(9888);
-    expect(updated?.loginDomains).toContain('juejin.im');
+    expect(updated?.loginDomains).toContain('mock-extra-domain.im');
   });
 
   it('should remove sessions by agent name or port', () => {
@@ -127,4 +127,29 @@ describe('SessionRegistry & Multi-Agent Identity Isolation', () => {
     registry.remove(9888);
     expect(registry.getByPort(9888)).toBeNull();
   });
+
+  it('should generate distinctive lightning title badge', () => {
+    const { BrowserActions } = require('../src/actions.js');
+    const fakeClient = {} as any;
+
+    const actionDefault = new BrowserActions(fakeClient, 'default');
+    expect(actionDefault.getBadgePrefix()).toBe('⚡ [lite] ');
+
+    const actionGemini = new BrowserActions(fakeClient, 'gemini');
+    expect(actionGemini.getBadgePrefix()).toBe('⚡ [lite:gemini] ');
+
+    const actionClaude = new BrowserActions(fakeClient, 'claude-code');
+    expect(actionClaude.getBadgePrefix()).toBe('⚡ [lite:claude-code] ');
+
+    // 测试环境变量自定义
+    const prevBadge = process.env.LITE_BROWSER_BADGE;
+    process.env.LITE_BROWSER_BADGE = '⚡ [custom]';
+    expect(actionGemini.getBadgePrefix()).toBe('⚡ [custom] ');
+    if (prevBadge) {
+      process.env.LITE_BROWSER_BADGE = prevBadge;
+    } else {
+      delete process.env.LITE_BROWSER_BADGE;
+    }
+  });
 });
+
