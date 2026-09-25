@@ -1,12 +1,13 @@
 /**
- * chrome.ts —— Chrome 进程探测、启停与 CDP Endpoint 解析
+ * chrome.ts —— Chrome 进程探测、启停与 Agent 身份感知调度
  */
 
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { SessionState, LaunchOptions } from './types.js';
+import type { SessionState, LaunchOptions, AgentSessionRecord } from './types.js';
+import { SessionRegistry } from './registry.js';
 
 const SESSION_FILE = '/tmp/lite-browser-session.json';
 const DEFAULT_PORT = 9222;
@@ -14,9 +15,11 @@ export const PROFILES_DIR = join(homedir(), '.lite-browser', 'profiles');
 
 export class ChromeManager {
   public port: number;
+  private registry: SessionRegistry;
 
   constructor(port = DEFAULT_PORT) {
     this.port = port;
+    this.registry = new SessionRegistry();
   }
 
   static getChromePath(): string {
@@ -45,11 +48,54 @@ export class ChromeManager {
   }
 
   async getOrLaunch(options: LaunchOptions & { temp?: boolean } = {}): Promise<SessionState> {
-    const { headless = false, url = 'about:blank', userDataDir, profile, temp = false } = options;
+    const { headless = false, url = 'about:blank', userDataDir, profile, temp = false, agent: explicitAgent, reuse = false } = options;
+
+    const agent = SessionRegistry.detectCurrentAgent(explicitAgent);
+
+    // 智能凭据复用检查（免重复登录）
+    if (reuse && url && url !== 'about:blank') {
+      const domain = SessionRegistry.extractDomain(url);
+      if (domain) {
+        const reusable = this.registry.findByDomain(domain);
+        if (reusable) {
+          const isAlive = await this.registry.pingPort(reusable.port);
+          if (isAlive) {
+            console.log(`💡 [免登录复用] 命中已有登录态会话 (Agent: ${reusable.agent}, 端口: ${reusable.port}, 域名: ${domain})`);
+            this.port = reusable.port;
+            const pages = await this.getPages();
+            let targetPage = pages.find((p: any) => p.type === 'page' && p.url.includes(domain));
+            if (!targetPage) {
+              targetPage = await this.newPage(url);
+            }
+            const reusedSession: SessionState = {
+              agent: reusable.agent,
+              port: reusable.port,
+              pid: reusable.pid,
+              wsUrl: targetPage.webSocketDebuggerUrl,
+              targetId: targetPage.id,
+              url: targetPage.url,
+              title: targetPage.title || '',
+              profile: reusable.profile,
+              loginDomains: reusable.loginDomains || [],
+              status: 'active',
+              createdAt: reusable.createdAt,
+              updatedAt: new Date().toISOString(),
+            };
+            writeFileSync(SESSION_FILE, JSON.stringify(reusedSession, null, 2));
+            return reusedSession;
+          }
+        }
+      }
+    }
+
+    // 若未显式传入固定端口，且显式指定了 Agent，则从注册表按 Agent 隔离端口
+    if (this.port === DEFAULT_PORT && explicitAgent) {
+      this.port = await this.registry.allocatePort(agent);
+    }
 
     let versionInfo = await this.checkPort();
 
-    const profileName = profile || (temp ? undefined : 'default');
+    const profileName = profile || (temp ? undefined : (agent !== 'default' ? `agent-${agent}` : 'default'));
     let effectiveUserDataDir = userDataDir;
 
     if (!effectiveUserDataDir) {
@@ -65,6 +111,8 @@ export class ChromeManager {
         mkdirSync(effectiveUserDataDir, { recursive: true });
       } catch (_) {}
     }
+
+    let spawnedPid: number | undefined;
 
     if (!versionInfo) {
       const chromePath = ChromeManager.getChromePath();
@@ -88,6 +136,7 @@ export class ChromeManager {
         detached: true,
         stdio: 'ignore',
       });
+      spawnedPid = proc.pid;
       proc.unref();
 
       const startTime = Date.now();
@@ -109,15 +158,26 @@ export class ChromeManager {
       targetPage = await this.newPage(url);
     }
 
+    const domain = SessionRegistry.extractDomain(targetPage.url);
+    const loginDomains = domain ? [domain] : [];
+
     const session: SessionState = {
+      agent,
       port: this.port,
+      pid: spawnedPid,
       wsUrl: targetPage.webSocketDebuggerUrl,
       targetId: targetPage.id,
       url: targetPage.url,
-      profile: profileName,
+      title: targetPage.title || '',
+      profile: profileName || 'default',
+      loginDomains,
+      status: 'active',
+      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
     writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+    this.registry.save(session);
 
     return session;
   }
@@ -134,22 +194,44 @@ export class ChromeManager {
     return await res.json();
   }
 
-  static getActiveSession(): SessionState | null {
-    if (!existsSync(SESSION_FILE)) return null;
-    try {
-      return JSON.parse(readFileSync(SESSION_FILE, 'utf-8'));
-    } catch (_) {
-      return null;
+  static getActiveSession(agentOrPort?: string | number): SessionState | null {
+    const registry = new SessionRegistry();
+    if (agentOrPort) {
+      if (typeof agentOrPort === 'number' || !isNaN(Number(agentOrPort))) {
+        const found = registry.getByPort(Number(agentOrPort));
+        if (found) return found;
+      } else {
+        const found = registry.getByAgent(String(agentOrPort));
+        if (found) return found;
+      }
     }
+
+    // 默认从临时全局会话读取，若无则取注册表中最近的 active 会话
+    if (existsSync(SESSION_FILE)) {
+      try {
+        return JSON.parse(readFileSync(SESSION_FILE, 'utf-8'));
+      } catch (_) {}
+    }
+
+    const all = registry.getAll().filter((s) => s.status === 'active');
+    return all.length > 0 ? all[all.length - 1] : null;
   }
 
-  static updateSessionUrl(url: string): void {
+  static updateSessionUrl(url: string, title = ''): void {
     const session = ChromeManager.getActiveSession();
     if (session) {
       session.url = url;
+      if (title) session.title = title;
       session.updatedAt = new Date().toISOString();
+
+      const domain = SessionRegistry.extractDomain(url);
+      if (domain && !session.loginDomains?.includes(domain)) {
+        session.loginDomains = [...(session.loginDomains || []), domain];
+      }
+
       try {
         writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+        new SessionRegistry().save(session);
       } catch (_) {}
     }
   }
@@ -163,9 +245,12 @@ export class ChromeManager {
     }
   }
 
-  static clearSession(): void {
+  static clearSession(agentOrPort?: string | number): void {
     if (existsSync(SESSION_FILE)) {
       try { unlinkSync(SESSION_FILE); } catch (_) {}
+    }
+    if (agentOrPort) {
+      new SessionRegistry().remove(agentOrPort);
     }
   }
 }

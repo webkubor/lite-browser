@@ -17,22 +17,22 @@ export class BrowserActions {
     this.client = client;
   }
 
-  static async launchOrConnect(options: { url?: string; headless?: boolean; port?: number; userDataDir?: string; profile?: string; temp?: boolean } = {}): Promise<BrowserActions> {
+  static async launchOrConnect(options: LaunchOptions & { temp?: boolean } = {}): Promise<BrowserActions> {
     const mgr = new ChromeManager(options.port || 9222);
     const session = await mgr.getOrLaunch(options);
     const client = new CdpClient(session.wsUrl);
     await client.connect();
     const browser = new BrowserActions(client);
-    if (options.url && options.url !== 'about:blank') {
+    if (options.url && options.url !== 'about:blank' && session.url !== options.url) {
       await browser.open(options.url);
     }
     return browser;
   }
 
-  static async connectToSession(): Promise<BrowserActions> {
-    const session = ChromeManager.getActiveSession();
+  static async connectToSession(agentOrPort?: string | number): Promise<BrowserActions> {
+    const session = ChromeManager.getActiveSession(agentOrPort);
     if (!session || !session.wsUrl) {
-      throw new Error('未找到活跃的浏览器会话。请先执行 `lite-browser open <url>` 建立会话。');
+      throw new Error(`未找到活跃的浏览器会话${agentOrPort ? ` (Agent/Port: ${agentOrPort})` : ''}。请先执行 \`lite-browser open <url>\` 建立会话。`);
     }
     const client = new CdpClient(session.wsUrl);
     await client.connect();

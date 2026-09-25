@@ -21,14 +21,22 @@ export interface SnapshotResult {
   url: string;
 }
 
-export interface SessionState {
+export interface AgentSessionRecord {
+  agent: string;
   port: number;
-  wsUrl: string;
-  targetId: string;
+  pid?: number;
+  profile: string;
   url: string;
-  profile?: string;
+  title: string;
+  targetId: string;
+  wsUrl: string;
+  loginDomains: string[];
+  status: 'active' | 'idle' | 'closed';
+  createdAt: string;
   updatedAt: string;
 }
+
+export interface SessionState extends AgentSessionRecord {}
 
 export interface LaunchOptions {
   headless?: boolean;
@@ -36,6 +44,8 @@ export interface LaunchOptions {
   userDataDir?: string;
   profile?: string;
   port?: number;
+  agent?: string;
+  reuse?: boolean;
 }
 
 export interface TrajectoryAction {

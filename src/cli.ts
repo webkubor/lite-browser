@@ -11,6 +11,7 @@ import { RecipeEngine } from './recipe.js';
 import { TaskEngine } from './task.js';
 import { CookieManager } from './cookie.js';
 import { McpServer } from './mcp.js';
+import { SessionRegistry } from './registry.js';
 
 const USAGE = `
 🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.1.1)
@@ -120,8 +121,12 @@ async function main() {
           profile = args[profIdx + 1];
         }
 
-        console.log(`🌐 正在打开 ${url} (无头模式: ${headless ? '是' : '否'}, Profile: ${temp ? '临时' : profile})...`);
-        const browser = await BrowserActions.launchOrConnect({ url, headless, profile, temp });
+        const agentIdx = args.indexOf('--agent');
+        const agent = agentIdx >= 0 ? args[agentIdx + 1] : undefined;
+        const reuse = args.includes('--reuse');
+
+        console.log(`🌐 正在打开 ${url} (无头模式: ${headless ? '是' : '否'}, Profile: ${temp ? '临时' : profile}${agent ? `, Agent: ${agent}` : ''}${reuse ? ', 智能复用: 是' : ''})...`);
+        const browser = await BrowserActions.launchOrConnect({ url, headless, profile, temp, agent, reuse });
         const title = await browser.getTitle();
         console.log(`✅ 页面已就绪: "${title}" (${url})`);
         break;
@@ -659,6 +664,30 @@ async function main() {
             console.log(`• ${p}`);
           }
           console.log('');
+        }
+        break;
+      }
+
+      // Session 多租户与 Agent 会话管理指令
+      case 'session': {
+        const sub = args[1];
+        const registry = new SessionRegistry();
+        if (!sub || sub === 'list') {
+          const sessions = registry.getAll();
+          console.log(`\n🌐 当前注册的所有 Agent 会话 (${sessions.length} 个):`);
+          console.log('────────────────────────────────────────────────────────────────────────────────────────');
+          for (const s of sessions) {
+            const statusIcon = s.status === 'active' ? '🟢 活跃' : '⚪ 已关闭';
+            const domains = s.loginDomains && s.loginDomains.length > 0 ? s.loginDomains.join(', ') : '无';
+            console.log(`• [${s.agent.padEnd(12)}] 端口:${s.port} ${statusIcon} (PID:${s.pid || '-'}) 登录域: [${domains}]`);
+            if (s.url) console.log(`    URL: ${s.url}`);
+          }
+          console.log('────────────────────────────────────────────────────────────────────────────────────────\n');
+        } else if (sub === 'clean') {
+          const res = await registry.cleanDeadSessions();
+          console.log(`✅ 已清理 ${res.cleaned} 个失效会话，当前活跃会话: ${res.active} 个`);
+        } else {
+          console.error(`❌ 未知 session 子命令: ${sub}。支持: list, clean`);
         }
         break;
       }

@@ -11,11 +11,13 @@ export * from './recipe.js';
 export * from './task.js';
 export * from './cookie.js';
 export * from './mcp.js';
+export * from './registry.js';
 
 import { BrowserActions } from './actions.js';
 import { RecipeEngine } from './recipe.js';
 import { TaskEngine } from './task.js';
 import { CookieManager } from './cookie.js';
+import { SessionRegistry } from './registry.js';
 import type { LaunchOptions } from './types.js';
 
 /**
@@ -32,8 +34,8 @@ export class LiteBrowser {
   /**
    * 连接至已存在的活跃会话
    */
-  static async connect(): Promise<BrowserActions> {
-    return await BrowserActions.connectToSession();
+  static async connect(agentOrPort?: string | number): Promise<BrowserActions> {
+    return await BrowserActions.connectToSession(agentOrPort);
   }
 
   /**
@@ -48,6 +50,13 @@ export class LiteBrowser {
    */
   static get tasks(): TaskEngine {
     return new TaskEngine();
+  }
+
+  /**
+   * 会话与多租户注册中心
+   */
+  static get sessions(): SessionRegistry {
+    return new SessionRegistry();
   }
 
   /**
