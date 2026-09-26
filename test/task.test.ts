@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { TaskEngine } from '../src/task.js';
+import { TaskEngine, selfEntryArgs } from '../src/task.js';
 import { McpServer } from '../src/mcp.js';
 import { LiteBrowser } from '../src/index.js';
 
@@ -60,5 +60,26 @@ describe('LiteBrowser SDK Facade', () => {
     expect(LiteBrowser.cookies).toBeDefined();
     expect(typeof LiteBrowser.open).toBe('function');
     expect(typeof LiteBrowser.connect).toBe('function');
+  });
+});
+
+describe('selfEntryArgs —— 重新拉起自己时的入口参数', () => {
+  it('bun run 下要补真实入口脚本路径', () => {
+    expect(selfEntryArgs(['/bun', '/repo/src/cli.ts', 'delegate'], '/bun')).toEqual(['/repo/src/cli.ts']);
+  });
+
+  it('编译成单文件二进制后不能补 bunfs 虚拟路径', () => {
+    // 回归：补进去会让 worker 多收一个位置参数，只吐 USAGE 什么也不做
+    expect(selfEntryArgs(['bun', '/$bunfs/root/lite-browser', 'delegate'], '/usr/local/bin/lite-browser')).toEqual([]);
+  });
+
+  it('argv[1] 就是可执行文件本身时不补', () => {
+    expect(
+      selfEntryArgs(['/usr/local/bin/lite-browser', '/usr/local/bin/lite-browser'], '/usr/local/bin/lite-browser')
+    ).toEqual([]);
+  });
+
+  it('argv[1] 缺失时不补', () => {
+    expect(selfEntryArgs(['bun'], '/bun')).toEqual([]);
   });
 });

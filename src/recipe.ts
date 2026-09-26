@@ -6,10 +6,24 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlink
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { SOP, SOPMatch, SOPSchedule, SOPParameter, SOPChangelog, RecipeStep, TrajectoryAction } from './types.js';
+import { SessionRegistry } from './registry.js';
 
 export const GLOBAL_RECIPES_DIR = join(homedir(), '.lite-browser', 'recipes');
 export const LOCAL_RECIPES_DIR = join(process.cwd(), '.lite-browser', 'recipes');
-const ACTIVE_TRAJECTORY_FILE = '/tmp/lite-browser-trajectory.json';
+
+/**
+ * 轨迹文件**按 Agent 隔离**。
+ *
+ * 曾经是全局单文件 `/tmp/lite-browser-trajectory.json`：两个 Agent 并行时，
+ * 各自的 open/click/type 会交错写进同一条轨迹，`done` 沉淀出来的 SOP 是两件事
+ * 拼在一起的怪物。这跟会话指针全局共用是同一类 bug。
+ */
+const TRAJECTORY_DIR = join(homedir(), '.lite-browser', 'trajectory');
+
+export function trajectoryFileFor(agent?: string): string {
+  const a = String(agent || RecipeEngine.currentActor() || 'default').replace(/[^a-zA-Z0-9._-]/g, '_');
+  return join(TRAJECTORY_DIR, `${a}.json`);
+}
 
 export interface SaveSOPOptions {
   name: string;
@@ -63,11 +77,30 @@ export class RecipeEngine {
     }
   }
 
+  /**
+   * 当前操作者身份。轨迹必须记在**做这件事的 Agent** 名下，
+   * 否则多 Agent 并行时轨迹会互相污染。
+   */
+  private static actor?: string;
+
+  static setActor(agent?: string): void {
+    RecipeEngine.actor = agent;
+  }
+
+  static currentActor(): string {
+    return RecipeEngine.actor || SessionRegistry.detectCurrentAgent() || 'default';
+  }
+
   static recordAction(action: Omit<TrajectoryAction, 'timestamp'>): void {
+    const file = trajectoryFileFor();
+    if (!existsSync(TRAJECTORY_DIR)) {
+      try { mkdirSync(TRAJECTORY_DIR, { recursive: true }); } catch (_) {}
+    }
+
     let trajectory: TrajectoryAction[] = [];
-    if (existsSync(ACTIVE_TRAJECTORY_FILE)) {
+    if (existsSync(file)) {
       try {
-        trajectory = JSON.parse(readFileSync(ACTIVE_TRAJECTORY_FILE, 'utf-8'));
+        trajectory = JSON.parse(readFileSync(file, 'utf-8'));
       } catch (_) {}
     }
 
@@ -76,21 +109,48 @@ export class RecipeEngine {
       timestamp: Date.now(),
     });
 
-    writeFileSync(ACTIVE_TRAJECTORY_FILE, JSON.stringify(trajectory, null, 2));
+    writeFileSync(file, JSON.stringify(trajectory, null, 2));
   }
 
-  static resetTrajectory(): void {
-    if (existsSync(ACTIVE_TRAJECTORY_FILE)) {
+  static resetTrajectory(agent?: string): void {
+    const file = trajectoryFileFor(agent);
+    if (existsSync(file)) {
       try {
-        unlinkSync(ACTIVE_TRAJECTORY_FILE);
+        unlinkSync(file);
       } catch (_) {}
+    }
+    // 清理历史遗留的全局轨迹文件
+    const legacy = '/tmp/lite-browser-trajectory.json';
+    if (existsSync(legacy)) {
+      try { unlinkSync(legacy); } catch (_) {}
     }
   }
 
-  static getTrajectory(): TrajectoryAction[] {
-    if (!existsSync(ACTIVE_TRAJECTORY_FILE)) return [];
+  /**
+   * 读取轨迹。
+   *
+   * 自己的轨迹为空时，若全系统恰好只有另一个 Agent 留下过轨迹，则采用它 ——
+   * 无歧义才推断，多条并存时宁可报空，也不猜（猜错会沉淀出别人的 SOP）。
+   */
+  static getTrajectory(agent?: string): TrajectoryAction[] {
+    const own = RecipeEngine.readTrajectoryFile(trajectoryFileFor(agent));
+    if (own.length > 0) return own;
+
+    if (!existsSync(TRAJECTORY_DIR)) return [];
+    const others = readdirSync(TRAJECTORY_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .filter((f) => f !== `${String(agent || RecipeEngine.currentActor()).replace(/[^a-zA-Z0-9._-]/g, '_')}.json`)
+      .map((f) => RecipeEngine.readTrajectoryFile(join(TRAJECTORY_DIR, f)))
+      .filter((t) => t.length > 0);
+
+    return others.length === 1 ? others[0] : [];
+  }
+
+  private static readTrajectoryFile(file: string): TrajectoryAction[] {
+    if (!existsSync(file)) return [];
     try {
-      return JSON.parse(readFileSync(ACTIVE_TRAJECTORY_FILE, 'utf-8'));
+      const parsed = JSON.parse(readFileSync(file, 'utf-8'));
+      return Array.isArray(parsed) ? parsed : [];
     } catch (_) {
       return [];
     }
@@ -98,16 +158,36 @@ export class RecipeEngine {
 
   /**
    * 保存或自进化更新 SOP（绝不单纯做加法或乱开副本）
+   *
+   * explicitSteps 用于 `sop adopt`：把已经写好的外部脚本一次性收编，
+   * 这种场景本来就没有轨迹可沉淀。
    */
-  saveOrUpdate(options: SaveSOPOptions | string, legacyDesc?: string): SOP {
+  saveOrUpdate(options: SaveSOPOptions | string, legacyDesc?: string, explicitSteps?: RecipeStep[]): SOP {
     const opts: SaveSOPOptions =
       typeof options === 'string'
         ? { name: options, description: legacyDesc }
         : options;
 
-    const rawActions = RecipeEngine.getTrajectory();
-    if (rawActions.length === 0) {
-      throw new Error('当前会话没有记录到任何可沉淀的动作轨迹');
+    const rawActions = explicitSteps?.length ? [] : RecipeEngine.getTrajectory();
+    if (rawActions.length === 0 && !explicitSteps?.length) {
+      // 这是本工具最容易让人误判的地方：活干完了、`done` 也跑了，却什么都没沉淀，
+      // 而且不给原因。真实原因通常是——操作走的是自研脚本直连 CDP，从未经过
+      // lite-browser 的动作层，所以根本没有轨迹可沉淀。必须把话说清楚。
+      throw new Error(
+        [
+          `没有可沉淀的动作轨迹（Agent: ${RecipeEngine.currentActor()}）。`,
+          '',
+          '自动沉淀的前提是「操作经过 lite-browser 的动作层」：',
+          '  · lite-browser open / click / type / eval ...  —— 会被记录',
+          '  · 你自己的脚本直连 CDP（例如 twitter-poster.mjs）—— 不会被记录，沉淀引擎看不见',
+          '',
+          '两种修法：',
+          '  1) 让脚本调用经过工具，这样以后自动沉淀：',
+          '       lite-browser exec -- node scripts/twitter-poster.mjs check',
+          '  2) 已经写好的脚本想一次性纳入索引：',
+          '       lite-browser sop adopt <name> --script scripts/twitter-poster.mjs',
+        ].join('\n')
+      );
     }
 
     const optimizedSteps: RecipeStep[] = [];
@@ -118,6 +198,11 @@ export class RecipeEngine {
 
     if (opts.domain) detectedDomains.add(opts.domain);
     if (opts.urlPattern) detectedUrlPatterns.add(opts.urlPattern);
+
+    // adopt 路径：直接采用外部给定的步骤，无需轨迹
+    if (explicitSteps?.length) {
+      optimizedSteps.push(...explicitSteps);
+    }
 
     for (let i = 0; i < rawActions.length; i++) {
       const act = rawActions[i];
@@ -204,6 +289,18 @@ export class RecipeEngine {
           direction: act.direction,
           amount: act.amount,
         });
+      } else if (act.type === 'exec' && act.command) {
+        // 连续相同的命令只留一次，避免重试造成的重复步骤
+        const last = optimizedSteps[optimizedSteps.length - 1];
+        if (!(last && last.action === 'exec' && last.command === act.command && JSON.stringify(last.args) === JSON.stringify(act.args))) {
+          optimizedSteps.push({
+            step: optimizedSteps.length + 1,
+            action: 'exec',
+            command: act.command,
+            args: act.args || [],
+            description: `执行命令 ${[act.command, ...(act.args || [])].join(' ')}`,
+          });
+        }
       } else if (act.type === 'wait') {
         const last = optimizedSteps[optimizedSteps.length - 1];
         if (last && last.action === 'wait') {

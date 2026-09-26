@@ -8,16 +8,23 @@ import { ChromeManager } from './chrome.js';
 import { INJECTED_DOM_SCRIPT, formatSnapshot } from './dom.js';
 import { RecipeEngine } from './recipe.js';
 import { SessionRegistry } from './registry.js';
-import type { InteractiveElement, LaunchOptions, SnapshotResult } from './types.js';
+import {
+  AUTH_PROBE_SCRIPT,
+  buildHandoff,
+  loginHandoffPrompt,
+} from './handoff.js';
+import type { AuthProbe, HandoffState, InteractiveElement, LaunchOptions, SessionPhase, SnapshotResult } from './types.js';
 
 export class BrowserActions {
   public client: CdpClient;
   public cachedElements: InteractiveElement[] = [];
   public agent?: string;
+  public port?: number;
 
-  constructor(client: CdpClient, agent?: string) {
+  constructor(client: CdpClient, agent?: string, port?: number) {
     this.client = client;
     this.agent = agent;
+    this.port = port;
   }
 
   static async launchOrConnect(options: LaunchOptions & { temp?: boolean } = {}): Promise<BrowserActions> {
@@ -25,11 +32,23 @@ export class BrowserActions {
     const session = await mgr.getOrLaunch(options);
     const client = new CdpClient(session.wsUrl);
     await client.connect();
-    const browser = new BrowserActions(client, session.agent || options.agent);
+    const browser = new BrowserActions(client, session.agent || options.agent, session.port);
     if (options.url && options.url !== 'about:blank' && session.url !== options.url) {
       await browser.open(options.url);
     } else {
       await browser.applyTitleBadge();
+      // 浏览器是以 URL 作为启动参数被拉起来的，此刻 /json/list 读到的页面
+      // 往往还没加载完 —— 标题是空的、相位还停在 idle。这里补一次标题/URL
+      // 与登录态刷新，否则 status 会给出一个「空标题 + idle」的假状态。
+      if (session.url && session.url !== 'about:blank') {
+        const freshUrl = await browser.getUrl().catch(() => '');
+        const freshTitle = await browser.getTitle().catch(() => '');
+        ChromeManager.updateSessionUrl(freshUrl || session.url, freshTitle, session.port);
+      }
+      const { probe, enteredHandoff } = await browser.refreshPhaseAfterProbe();
+      if (!enteredHandoff && !probe.loginWall && session.url !== 'about:blank') {
+        browser.setHandoff('acting');
+      }
     }
     return browser;
   }
@@ -37,13 +56,21 @@ export class BrowserActions {
   static async connectToSession(agentOrPort?: string | number): Promise<BrowserActions> {
     const session = ChromeManager.getActiveSession(agentOrPort);
     if (!session || !session.wsUrl) {
+      const registry = new SessionRegistry();
+      const actives = registry.getAll().filter((r) => r.status === 'active');
+      if (actives.length > 1 && !agentOrPort) {
+        throw new Error(
+          `检测到 ${actives.length} 个活跃会话（Agent: ${actives.map((a) => a.agent).join(', ')}），无法推断你要操作哪一个。` +
+            `请显式指定：lite-browser <命令> --agent <name>，或先执行 lite-browser session list 查看。`
+        );
+      }
       throw new Error(`未找到活跃的浏览器会话${agentOrPort ? ` (Agent/Port: ${agentOrPort})` : ''}。请先执行 \`lite-browser open <url>\` 建立会话。`);
     }
 
     try {
       const client = new CdpClient(session.wsUrl);
       await client.connect();
-      return new BrowserActions(client, session.agent);
+      return new BrowserActions(client, session.agent, session.port);
     } catch (_) {
       // 若原 targetId 标签已关闭或重定向，从该端口当前存活的 pages 中自愈重连
       const mgr = new ChromeManager(session.port);
@@ -54,14 +81,134 @@ export class BrowserActions {
         session.targetId = activePage.id;
         session.url = activePage.url;
         session.title = activePage.title;
-        ChromeManager.updateSessionUrl(activePage.url, activePage.title);
+        ChromeManager.updateSessionUrl(activePage.url, activePage.title, session.port);
         const client = new CdpClient(activePage.webSocketDebuggerUrl);
         await client.connect();
-        return new BrowserActions(client, session.agent);
+        return new BrowserActions(client, session.agent, session.port);
       }
       throw new Error(`浏览器会话已失效 (Port: ${session.port})。请重新执行 \`lite-browser open <url>\`。`);
     }
   }
+
+  // ───────────────────────── 交接协议：探针与相位 ─────────────────────────
+
+  /** 对当前页面做登录态探针 */
+  async probeAuth(): Promise<AuthProbe> {
+    await this.client.send('Runtime.enable');
+    const res = await this.client.send('Runtime.evaluate', {
+      expression: AUTH_PROBE_SCRIPT,
+      returnByValue: true,
+    });
+    const value = res.result?.value;
+    const fallback: AuthProbe = {
+      state: 'unknown',
+      score: 0,
+      loginWall: false,
+      domain: null,
+      url: '',
+      signals: ['probe-no-return'],
+      probeAt: new Date().toISOString(),
+    };
+    if (!value) return fallback;
+    return { ...fallback, ...value, probeAt: new Date().toISOString() };
+  }
+
+  /** 把相位与「人需要做什么」落盘，使任何后续命令都能读到 */
+  setHandoff(phase: SessionPhase, patch: Partial<Omit<HandoffState, 'phase' | 'since'>> = {}, step?: HandoffState['step']): HandoffState {
+    const session = ChromeManager.getActiveSession(this.port);
+    const handoff = buildHandoff(phase, session?.handoff, { ...patch, step: step ?? session?.handoff?.step });
+    ChromeManager.setHandoff(handoff, this.port);
+    return handoff;
+  }
+
+  /** 探针 + 相位联动：命中登录墙就自动进入交接态 */
+  async refreshPhaseAfterProbe(): Promise<{ probe: AuthProbe; handoff: HandoffState | null; enteredHandoff: boolean }> {
+    const probe = await this.probeAuth();
+    const session = ChromeManager.getActiveSession(this.port);
+    const current = session?.handoff?.phase ?? 'idle';
+
+    if (probe.loginWall) {
+      if (probe.state === 'anonymous' && probe.domain) {
+        // 登录墙状态下当前域名绝不能算 verified
+        const registry = new SessionRegistry();
+        if (session) {
+          registry.registerVisitedDomain(session.port, probe.domain);
+        }
+      }
+      const already = current === 'awaiting_human';
+      const prompt = loginHandoffPrompt(probe.domain, `页面呈现登录墙（证据: ${probe.signals.join(', ') || '未知'}）`);
+      const handoff = this.setHandoff('awaiting_human', {
+        needs: prompt.needs,
+        blocker: prompt.blocker,
+        nextAction: prompt.nextAction,
+      });
+      return { probe, handoff, enteredHandoff: !already };
+    }
+
+    // 探针确认已登录 —— 证据说话，无论此前相位是什么都登记 verified。
+    // 曾经这里只在「上一相位恰好是 awaiting_human」时才登记，于是 open() 先把
+    // 相位置为 navigating 就会漏登记，--reuse 永远命中不到刚登录好的会话。
+    if (probe.state === 'authenticated') {
+      if (probe.domain) ChromeManager.markVerifiedDomain(probe.domain, this.port);
+      if (current === 'awaiting_human') {
+        const handoff = this.setHandoff('acting');
+        return { probe, handoff, enteredHandoff: false };
+      }
+      return { probe, handoff: session?.handoff ?? null, enteredHandoff: false };
+    }
+
+    return { probe, handoff: session?.handoff ?? null, enteredHandoff: false };
+  }
+
+  /**
+   * 阻塞等待人类完成介入。
+   *
+   * 这是交接协议里 Agent 唯一需要调用的等待原语：它自己知道该等多久、
+   * 人做完之后该走哪条路，不用 Agent 自己 sleep 碰运气。
+   */
+  async awaitHuman(
+    timeoutSeconds = 300,
+    pollSeconds = 3,
+    onProgress?: (elapsed: number, probe: AuthProbe) => void
+  ): Promise<{ ready: boolean; reason: 'authenticated' | 'timeout'; waitedSeconds: number; auth: AuthProbe['state']; domain: string | null }> {
+    const started = Date.now();
+    let last: AuthProbe | null = null;
+    const deadline = started + timeoutSeconds * 1000;
+
+    for (;;) {
+      try {
+        last = await this.probeAuth();
+      } catch (_) {
+        // 页面可能正在导航/刷新，探针失败不致命，继续轮询
+      }
+      if (last) {
+        onProgress?.(Math.round((Date.now() - started) / 1000), last);
+        if (last.state === 'authenticated' && !last.loginWall) {
+          const handoff = this.setHandoff('acting');
+          if (last.domain) ChromeManager.markVerifiedDomain(last.domain, this.port);
+          void handoff;
+          return {
+            ready: true,
+            reason: 'authenticated',
+            waitedSeconds: Math.round((Date.now() - started) / 1000),
+            auth: last.state,
+            domain: last.domain,
+          };
+        }
+      }
+      if (Date.now() >= deadline) {
+        return {
+          ready: false,
+          reason: 'timeout',
+          waitedSeconds: Math.round((Date.now() - started) / 1000),
+          auth: last?.state ?? 'unknown',
+          domain: last?.domain ?? null,
+        };
+      }
+      await new Promise((r) => setTimeout(r, Math.max(500, pollSeconds * 1000)));
+    }
+  }
+
 
   getBadgePrefix(): string {
     const customBadge = process.env.LITE_BROWSER_BADGE;
@@ -117,7 +264,8 @@ export class BrowserActions {
     } catch (_) {}
   }
 
-  async open(url: string): Promise<{ ok: boolean; url: string }> {
+  async open(url: string): Promise<{ ok: boolean; url: string; title: string; phase: SessionPhase; auth: AuthProbe['state']; loginWall: boolean; needs?: string; nextAction?: string; signals: string[] }> {
+    this.setHandoff('navigating');
     await this.client.send('Page.enable');
     await this.client.send('Runtime.enable');
     await this.client.send('DOM.enable');
@@ -134,14 +282,30 @@ export class BrowserActions {
     await this.applyTitleBadge();
     const currentTitle = await this.getTitle();
 
-    ChromeManager.updateSessionUrl(targetUrl, currentTitle);
+    ChromeManager.updateSessionUrl(targetUrl, currentTitle, this.port);
+
+    // 导航结束后立刻判定相位：撞上登录墙就地交接，而不是让 Agent 继续盲跑
+    const { probe, handoff, enteredHandoff } = await this.refreshPhaseAfterProbe();
+    if (!enteredHandoff && !probe.loginWall) {
+      this.setHandoff('acting');
+    }
 
     RecipeEngine.recordAction({
       type: 'open',
       url: targetUrl,
     });
 
-    return { ok: true, url: targetUrl };
+    return {
+      ok: true,
+      url: targetUrl,
+      title: currentTitle,
+      phase: handoff?.phase ?? 'acting',
+      auth: probe.state,
+      loginWall: probe.loginWall,
+      needs: handoff?.needs,
+      nextAction: handoff?.nextAction,
+      signals: probe.signals,
+    };
   }
 
   async getTitle(): Promise<string> {
@@ -185,7 +349,22 @@ export class BrowserActions {
     const { title, url } = pageInfo.result.value || {};
     const formatted = formatSnapshot(elements, url, title);
 
-    return { elements, formatted, title, url };
+    // snapshot 是 Agent 每一步都会调的命令，顺便做一次登录态判定：
+    // 页面中途弹登录框（SPA 常见）也能立刻被捕获并交接。
+    let phase: SessionPhase = 'acting';
+    let auth: AuthProbe['state'] = 'unknown';
+    let needs: string | undefined;
+    let nextAction: string | undefined;
+    try {
+      const probeRes = await this.refreshPhaseAfterProbe();
+      phase = probeRes.handoff?.phase ?? 'acting';
+      auth = probeRes.probe.state;
+      needs = probeRes.handoff?.needs;
+      nextAction = probeRes.handoff?.nextAction;
+      if (!probeRes.probe.loginWall) this.setHandoff('acting');
+    } catch (_) {}
+
+    return { elements, formatted, title, url, phase, auth, needs, nextAction };
   }
 
   async click(target: string): Promise<{ ok: boolean; target: string; x: number; y: number; selector: string }> {

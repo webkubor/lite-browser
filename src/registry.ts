@@ -54,13 +54,24 @@ export class SessionRegistry {
   }
 
   /**
-   * 获取所有会话记录
+   * 获取所有会话记录（含旧格式迁移）。
+   *
+   * 旧版本把「导航到过该域名」直接写进 loginDomains，于是「已记录登录域」
+   * 只能证明访问过、不能证明登录过。迁移时把这类旧值降级进 visitedDomains，
+   * verifiedDomains 从空开始 —— 宁可真登录一次，也不谎报免登录复用。
    */
   getAll(): AgentSessionRecord[] {
     this.ensureDir();
     if (!existsSync(REGISTRY_FILE)) return [];
     try {
-      return JSON.parse(readFileSync(REGISTRY_FILE, 'utf-8'));
+      const raw = JSON.parse(readFileSync(REGISTRY_FILE, 'utf-8'));
+      if (!Array.isArray(raw)) return [];
+      return raw.map((r: AgentSessionRecord) => ({
+        ...r,
+        verifiedDomains: r.verifiedDomains ?? [],
+        visitedDomains: r.visitedDomains ?? (r.loginDomains ? [...r.loginDomains] : []),
+        loginDomains: r.verifiedDomains ?? [],
+      }));
     } catch (_) {
       return [];
     }
@@ -72,15 +83,22 @@ export class SessionRegistry {
   save(record: AgentSessionRecord): void {
     this.ensureDir();
     const all = this.getAll();
-    const index = all.findIndex((r) => r.agent.toLowerCase() === record.agent.toLowerCase());
+    const normalized: AgentSessionRecord = {
+      ...record,
+      verifiedDomains: record.verifiedDomains ?? [],
+      visitedDomains: record.visitedDomains ?? [],
+      // 镜像写回旧字段，保持外部消费方兼容
+      loginDomains: record.verifiedDomains ?? [],
+    };
+    const index = all.findIndex((r) => r.agent.toLowerCase() === normalized.agent.toLowerCase());
     if (index >= 0) {
       all[index] = {
         ...all[index],
-        ...record,
+        ...normalized,
         updatedAt: new Date().toISOString(),
       };
     } else {
-      all.push(record);
+      all.push(normalized);
     }
     writeFileSync(REGISTRY_FILE, JSON.stringify(all, null, 2));
   }
@@ -102,21 +120,39 @@ export class SessionRegistry {
   }
 
   /**
-   * 根据目标域名寻找已有可用登录态的会话（免重复登录）
+   * 按域名寻找可复用的会话（免重复登录）。
+   *
+   * 只认 verifiedDomains —— 也就是经过探针或人工确认的登录态。曾经参与匹配的
+   * `r.url.includes(domain)` 已移除：那只是在说「这个会话当前开在这个域名上」，
+   * 和「这个会话登录了该域名」是两回事。
    */
   findByDomain(domainOrUrl: string): AgentSessionRecord | null {
     const domain = SessionRegistry.extractDomain(domainOrUrl) || domainOrUrl;
     const all = this.getAll();
-
-    // 优先寻找 status === 'active' 且显式标记拥有该域名登录态的会话
-    const matched = all.find(
-      (r) =>
-        r.status === 'active' &&
-        (r.loginDomains?.some((d) => domain.includes(d) || d.includes(domain)) ||
-          r.url?.includes(domain))
+    return (
+      all.find(
+        (r) =>
+          r.status === 'active' &&
+          r.verifiedDomains?.some((d) => domain.includes(d) || d.includes(domain))
+      ) || null
     );
+  }
 
-    return matched || null;
+  /**
+   * 仅导航到过该域名（不构成登录证据）。命中即返回 true 表示新登记。
+   */
+  registerVisitedDomain(port: number, domainOrUrl: string): boolean {
+    const domain = SessionRegistry.extractDomain(domainOrUrl) || domainOrUrl;
+    if (!domain || domain === 'about:blank' || domain === 'localhost') return false;
+    const all = this.getAll();
+    const record = all.find((r) => r.port === port);
+    if (!record) return false;
+    if (!record.visitedDomains) record.visitedDomains = [];
+    if (record.visitedDomains.includes(domain)) return false;
+    record.visitedDomains.push(domain);
+    record.updatedAt = new Date().toISOString();
+    writeFileSync(REGISTRY_FILE, JSON.stringify(all, null, 2));
+    return true;
   }
 
   /**
@@ -162,20 +198,60 @@ export class SessionRegistry {
   }
 
   /**
-   * 记录该会话成功访问/登录了某个平台域名
+   * 登记「已确认登录」的域名（verified）。只有探针判定 authenticated 或人工
+   * 显式 `session mark-login` 时才允许调用。
    */
   registerLoginDomain(port: number, domainOrUrl: string): void {
     const domain = SessionRegistry.extractDomain(domainOrUrl) || domainOrUrl;
     const all = this.getAll();
     const record = all.find((r) => r.port === port);
     if (record) {
-      if (!record.loginDomains) record.loginDomains = [];
-      if (!record.loginDomains.includes(domain)) {
-        record.loginDomains.push(domain);
-        record.updatedAt = new Date().toISOString();
-        writeFileSync(REGISTRY_FILE, JSON.stringify(all, null, 2));
+      if (!record.verifiedDomains) record.verifiedDomains = [];
+      if (!record.verifiedDomains.includes(domain)) {
+        record.verifiedDomains.push(domain);
       }
+      if (!record.visitedDomains) record.visitedDomains = [];
+      if (!record.visitedDomains.includes(domain)) {
+        record.visitedDomains.push(domain);
+      }
+      record.loginDomains = [...record.verifiedDomains];
+      record.updatedAt = new Date().toISOString();
+      writeFileSync(REGISTRY_FILE, JSON.stringify(all, null, 2));
     }
+  }
+
+  /**
+   * 写入交接状态（相位机）。这是「人现在该做什么」的唯一落盘点。
+   */
+  updateHandoff(port: number, handoff: AgentSessionRecord['handoff']): void {
+    const all = this.getAll();
+    const record = all.find((r) => r.port === port);
+    if (!record) return;
+    record.handoff = handoff;
+    record.lastSeen = new Date().toISOString();
+    record.updatedAt = record.lastSeen;
+    writeFileSync(REGISTRY_FILE, JSON.stringify(all, null, 2));
+  }
+
+  /**
+   * 刷新心跳，证明该会话的进程还活着（不只是端口还在监听）。
+   */
+  heartbeat(port: number): void {
+    const all = this.getAll();
+    const record = all.find((r) => r.port === port);
+    if (!record) return;
+    record.lastSeen = new Date().toISOString();
+    record.updatedAt = record.lastSeen;
+    writeFileSync(REGISTRY_FILE, JSON.stringify(all, null, 2));
+  }
+
+  /**
+   * 唯一的活跃会话。用于「未显式指定 agent/port」时的**无歧义**兜底：
+   * 只有恰好一个时才能安全推断，多个并存必须由调用方显式指定。
+   */
+  getSoleActive(): AgentSessionRecord | null {
+    const actives = this.getAll().filter((r) => r.status === 'active');
+    return actives.length === 1 ? actives[0] : null;
   }
 
   /**

@@ -1,5 +1,47 @@
 # CHANGELOG
 
+## [1.4.0] - 2026-09-26
+
+> **一句话摘要**：Agent 交接协议（人在环中的状态机与退出码契约）+ 外部脚本纳入沉淀体系的 `exec` 通道 + 资产发现。
+
+### 🤝 Agent 交接协议 (Handoff Protocol) —— 本次核心
+- **会话阶段状态机 (`SessionPhase`)**：新增 `idle → launching → acting → awaiting_human → done/failed` 显式阶段，任何命令都能读到「现在到底卡在哪一步」，不再靠 Agent 自己猜。
+- **加权登录墙探测 (`AUTH_PROBE_SCRIPT`)**：通过 URL 登录路径 (+3)、密码输入框 (+3)、二维码 (+2)、登录/注册文案 (+1) 正向加权，配合「退出登录 / Sign out」(-4)、头像 (-1)、会话 Cookie (-1) 负向扣分；总分 `>=3` 判为未登录，`<=0` 且有负向信号判为已登录，否则 `unknown`。**避免把「页面里有个登录链接」误判成登录墙。**
+- **`awaiting_human` 一等公民**：新增 `lite-browser await-human` 与 `delegate --await-human <秒>`，阻塞轮询直到人类完成登录/扫码/验证码，或超时退出。
+- **退出码契约**：`0=正常 1=执行错误 2=参数错误 3=需要人类介入 4=等待人类超时`。调用方 Agent 可以直接 `case $?` 决策，不必解析自然语言输出。
+- **交接卡片渲染**：`snapshot` / `whoami` / `status` 输出统一附带阶段、登录态、待办与下一步建议（`phase` / `auth` / `needs` / `nextAction`）。
+- **委派任务可续跑**：`DelegatedTask.status` 新增 `awaiting_human`，人类介入后 Worker 自动续跑后续步骤；等待人类超时**不再误判为失败**，新增 `lite-browser task retry <id>`。
+- **登录域分为「已验证」与「仅访问过」**：`--reuse` 只认探测确认过的域，历史上按域名猜登录态导致「复用成功但页面仍是登录墙」的假阳性被消除。
+
+### ✨ 新增特性 (What's New)
+- **`lite-browser exec -- <命令>`**：让自写在仓库里的 CDP / Python / Shell 脚本经由动作层执行，从而被轨迹引擎记录、最终由 `done` 自动沉淀为 SOP。**这是外部脚本进入沉淀体系的正式通道**，不需要手工注册。
+- **`lite-browser sop adopt <name> --script <路径> --intent "..."`**：一次性收编历史脚本（补救通道，不是常规路径）。
+- **资产发现 (`discoverAssets`)**：`sop list` 会扫描 `sop/`、`docs/`、`scripts/`、`bin/`，把「项目里已经存在但没纳入索引」的自动化资产列出来 —— 索引不到 ≠ 没做。只读，不写任何文件。带域名的资产优先展示、脚本优先于文档、默认展示 25 条（`--json` 取全量）。
+- **`lite-browser status`**：一眼看全当前 Agent 的会话、阶段、登录态与在跑任务。
+- **MCP 工具扩充**：新增 `browser_status`、`await_human`、`run_script`。
+
+### 🐛 缺陷修复 (Bug Fixes)
+- **修复编译版二进制无法拉起委派 Worker**（长期存在的发布级缺陷）：旧代码 `spawn(process.execPath, [process.argv[1], '_task_worker', ...])` 在单文件编译产物下会把 `/$bunfs/root/lite-browser` 重复插入 argv，Worker 启动即打印 USAGE 并退出，**委派功能在正式二进制上等于不可用**。新增 `selfEntryArgs()` 按编译/非编译两种运行时分别推导入口参数。
+- 修复 `sop run --dry-run` 输出 `undefined 步`（导入的 JSON 没有 `stepCount` 字段）。
+- 修复 `sop run --dry-run` 污染成功率统计（dry-run 不再计入 `recordRun`）。
+- 修复资产扫描把脚本 shebang 当成描述，导致列表里每个脚本的说明都是 `#!/usr/bin/env node`。
+- 修复多会话并存时连接歧义：新增会话改为按 Agent 分文件存放（`~/.lite-browser/sessions/<agent>.json`），不再共用全局单文件；存在多个活跃会话时抛出明确的歧义错误而非随机连接。
+- 修复 `open()` 会把 `awaiting_human` 阶段冲掉、CLI 硬编码 `profile='default'`、`delegate` 未透传 agent/port/profile 等交接相关缺陷。
+- 修复空轨迹时 `done` 的报错不知所云：现在明确说明「自写 CDP 脚本对动作层不可见」，并给出两种修法。
+
+### ⚠️ 破坏性变更与迁移 (Breaking Changes & Migration)
+- 会话文件路径由共享的 `/tmp/lite-browser-session.json` 迁移为 `~/.lite-browser/sessions/<agent>.json`。旧注册表里的 `loginDomains` 会自动迁移为 `visitedDomains`（即**降级为「仅访问过」，不再被 `--reuse` 复用**）。若某站点此前依赖按域名猜登录态复用，请重新登录一次使其被探测确认为 `verifiedDomains`。
+
+### 📦 安装与升级 (Install & Upgrade)
+```bash
+# 全局更新构建
+cd ~/dev/agent-infra/lite-browser && bun run build
+# 或通过一键脚本安装
+curl -fsSL https://raw.githubusercontent.com/webkubor/lite-browser/main/install.sh | bash
+```
+
+---
+
 ## [1.3.0] - 2026-09-26
 
 > **一句话摘要**：系统 Chrome 凭据安全解密提取（零密码交互）与富文本多行键盘注入管线。

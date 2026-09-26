@@ -6,6 +6,10 @@
 import { BrowserActions } from './actions.js';
 import { RecipeEngine } from './recipe.js';
 import { TaskEngine } from './task.js';
+import { buildSessionStatus } from './status.js';
+import { authStateLabel, renderHandoffCard } from './handoff.js';
+import { executeSteps, needsBrowser, runExecStep } from './runner.js';
+import type { SessionStatus } from './types.js';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -344,6 +348,49 @@ export class McpServer {
           required: ['taskId'],
         },
       },
+      {
+        name: 'browser_status',
+        description:
+          '查询当前会话的完整状态：相位 (phase)、进度、登录态判定、是否需要人类介入。' +
+          'phase 为 awaiting_human 时说明任务卡在等人，此时应把 needs 告知用户，而不是继续调用动作工具。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agent: { type: 'string', description: '指定 Agent 身份（多会话并存时必须指定）' },
+            port: { type: 'number', description: '指定 CDP 端口' },
+            live: { type: 'boolean', description: '是否连上去做活体登录态探针，默认 true' },
+          },
+        },
+      },
+      {
+        name: 'await_human',
+        description:
+          '阻塞等待人类完成登录/验证码/授权，直到检测到登录态或超时。' +
+          '撞到登录墙时应当调用它，而不是反复重试或放弃。返回 ready 表示可以继续执行后续步骤。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            timeoutSeconds: { type: 'number', description: '最长等待秒数，默认 300' },
+            pollSeconds: { type: 'number', description: '轮询间隔秒数，默认 3' },
+          },
+        },
+      },
+      {
+        name: 'run_script',
+        description:
+          '执行外部脚本（例如项目里已有的 twitter-poster.mjs）并把该调用记入动作轨迹。' +
+          '这是「执行完任务自动沉淀 SOP」对脚本类工作成立的前提 —— 脚本自己直连 CDP 时' +
+          '沉淀引擎看不见任何操作。调用后可用 sop_save 沉淀成 SOP。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            command: { type: 'string', description: '可执行命令，例如 node 或 python3' },
+            args: { type: 'array', items: { type: 'string' }, description: '命令参数，例如 ["scripts/twitter-poster.mjs","check"]' },
+            cwd: { type: 'string', description: '工作目录，默认当前目录' },
+          },
+          required: ['command'],
+        },
+      },
     ];
   }
 
@@ -356,12 +403,77 @@ export class McpServer {
           profile: args.profile,
         });
         const title = await browser.getTitle();
-        return `页面已打开: "${title}" (${args.url})`;
+        const status = await buildSessionStatus(browser.port, { live: true });
+        if (status?.phase === 'awaiting_human') {
+          return `${renderHandoffCard(status)}\n\n页面已打开，但检测到登录墙 —— 请把上面的「需要你做」告知用户，然后调用 await_human 等待，不要继续点击。`;
+        }
+        return `页面已打开: "${title}" (${args.url})\n相位: ${status?.phase ?? 'acting'} · 登录态: ${authStateLabel(status?.auth.state ?? 'unknown')}`;
+      }
+
+      case 'browser_status': {
+        const target = args.port ?? args.agent;
+        const status = await buildSessionStatus(target, { live: args.live ?? true });
+        if (!status) {
+          return '当前没有活跃会话。请先调用 browser_open 打开一个页面。';
+        }
+        return status as SessionStatus;
+      }
+
+      case 'await_human': {
+        const browser = await BrowserActions.connectToSession();
+        const res = await browser.awaitHuman(args.timeoutSeconds ?? 300, args.pollSeconds ?? 3);
+        if (res.ready) {
+          return `✅ 已检测到 ${res.domain || '目标站点'} 登录完成（等待 ${res.waitedSeconds}s），登录态已登记为 verified。可以继续执行后续步骤。`;
+        }
+        return (
+          `⚠️ 等待超时（${res.waitedSeconds}s），仍未检测到登录完成（当前判定: ${authStateLabel(res.auth)}）。\n` +
+          `请告知用户需要手动登录 ${res.domain || '目标站点'}，或再次调用 await_human 延长等待。`
+        );
+      }
+
+      /**
+       * 让外部脚本的调用进入轨迹。
+       *
+       * 这是「执行完任务自动落成 SOP」对脚本类工作成立的前提：脚本自己直连 CDP 时
+       * 沉淀引擎看不见任何操作；经由这里调用才会被记录，之后 sop_save 才能沉淀。
+       */
+      case 'run_script': {
+        const command = args.command;
+        const cmdArgs: string[] = args.args || [];
+        if (!command) return '缺少 command 参数';
+        try {
+          await runExecStep({ step: 0, action: 'exec', command, args: cmdArgs }, {}, args.cwd);
+          RecipeEngine.recordAction({
+            type: 'exec',
+            command,
+            args: cmdArgs,
+            exitCode: 0,
+            targetDescription: [command, ...cmdArgs].join(' '),
+          } as any);
+          return `✅ 已执行并记入轨迹: ${[command, ...cmdArgs].join(' ')}\n调用 sop_save 即可沉淀成 SOP。`;
+        } catch (err: any) {
+          RecipeEngine.recordAction({
+            type: 'exec',
+            command,
+            args: cmdArgs,
+            exitCode: 1,
+            targetDescription: [command, ...cmdArgs].join(' '),
+          } as any);
+          return `❌ ${err.message}（已记入轨迹，便于自愈时定位）`;
+        }
       }
 
       case 'browser_snapshot': {
         const browser = await BrowserActions.connectToSession();
         const res = await browser.snapshot();
+        if (res.phase === 'awaiting_human') {
+          return (
+            `${res.formatted}\n\n` +
+            `⏸ 相位: awaiting_human —— 页面需要登录，元素列表可能只是登录页的内容。\n` +
+            `👉 需要用户做: ${res.needs || '手动完成登录'}\n` +
+            `下一步: 调用 await_human 等待用户完成，不要盲目点击登录页元素。`
+          );
+        }
         return res.formatted;
       }
 
@@ -454,33 +566,14 @@ export class McpServer {
 
       case 'sop_run': {
         const rec = this.recipeEngine.getRecipe(args.name);
-        const browser = await BrowserActions.connectToSession();
         const vars = args.variables || {};
+        const browser = needsBrowser(rec) ? await BrowserActions.connectToSession() : null;
 
-        for (const step of rec.steps) {
-          if (step.action === 'open' && step.url) {
-            await browser.open(step.url);
-          } else if (step.action === 'click' && step.target) {
-            await browser.click(step.target);
-          } else if (step.action === 'type' && step.target) {
-            let textToType = step.text || step.defaultText || '';
-            for (const [k, v] of Object.entries(vars)) {
-              textToType = textToType.replaceAll(`{{${k}}}`, String(v));
-            }
-            await browser.type(step.target, textToType);
-          } else if (step.action === 'hover' && step.target) {
-            await browser.hover(step.target);
-          } else if (step.action === 'press' && step.key) {
-            await browser.press(step.key);
-          } else if (step.action === 'select' && step.target && step.value) {
-            await browser.select(step.target, step.value);
-          } else if (step.action === 'upload' && step.target && step.files) {
-            await browser.upload(step.target, step.files);
-          } else if (step.action === 'scroll') {
-            await browser.scroll(step.direction, step.amount);
-          } else if (step.action === 'wait') {
-            await browser.wait(step.seconds || 1);
-          }
+        try {
+          await executeSteps(rec, browser, { vars });
+        } catch (err: any) {
+          this.recipeEngine.recordRun(args.name, false);
+          throw err;
         }
 
         this.recipeEngine.recordRun(args.name, true);
