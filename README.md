@@ -137,7 +137,8 @@ lite-browser exec -- python3 scripts/xhs-collect.py collect all
 lite-browser done --name "xhs-collect" --intent "小红书数据采集"
 
 # 补救通道：一次性收编历史脚本（不是常规路径）
-lite-browser sop adopt xhs-collect --script scripts/xhs-collect.py --intent "小红书数据采集"
+lite-browser sop adopt xhs-collect --script scripts/xhs-collect.py \
+  --args "collect all" --intent "小红书数据采集" --frequency weekly
 ```
 
 ---
@@ -187,7 +188,7 @@ lite-browser sop adopt xhs-collect --script scripts/xhs-collect.py --intent "小
 | **SOP 进化** | `lite-browser done --name <name>` | 提炼轨迹为 SOP，若已存在自动升级并自愈 |
 | | `lite-browser sop list / match / show / run`| SOP 列表、语义匹配、详情查看与执行（`--no-scan` 跳过资产扫描） |
 | | `lite-browser sop export / import / validate`| 团队 SOP 规范共享与合法性校验 |
-| | `lite-browser sop adopt <name>` | 一次性收编已有脚本为 SOP（补救通道） |
+| | `lite-browser sop adopt <name> --script <路径> [--args "..."] [--frequency <f>]` | 一次性收编已有脚本为 SOP（补救通道） |
 | **外部脚本** | `lite-browser exec -- <命令>` | 让自写脚本经由动作层执行，从而可被自动沉淀 |
 | **任务委派** | `lite-browser delegate <name> [--var k=v]` | 将 SOP 委派至后台脱机运行（`--await-human` 允许人类介入） |
 | | `lite-browser task list / status / logs / retry` | 委派任务清单、状态查询、日志回放与续跑 |

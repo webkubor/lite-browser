@@ -15,7 +15,7 @@
 
 ### ✨ 新增特性 (What's New)
 - **`lite-browser exec -- <命令>`**：让自写在仓库里的 CDP / Python / Shell 脚本经由动作层执行，从而被轨迹引擎记录、最终由 `done` 自动沉淀为 SOP。**这是外部脚本进入沉淀体系的正式通道**，不需要手工注册。
-- **`lite-browser sop adopt <name> --script <路径> --intent "..."`**：一次性收编历史脚本（补救通道，不是常规路径）。
+- **`lite-browser sop adopt <name> --script <路径> --intent "..."`**：一次性收编历史脚本（补救通道，不是常规路径）。支持 `--args "collect all"` 传入子命令/开关，以及 `--frequency weekly` 一次定好调度 —— 真实脚本几乎都带子命令，不带参数的收编只是一条跑不起来的壳子。
 - **资产发现 (`discoverAssets`)**：`sop list` 会扫描 `sop/`、`docs/`、`scripts/`、`bin/`，把「项目里已经存在但没纳入索引」的自动化资产列出来 —— 索引不到 ≠ 没做。只读，不写任何文件。带域名的资产优先展示、脚本优先于文档、默认展示 25 条（`--json` 取全量）。
 - **`lite-browser status`**：一眼看全当前 Agent 的会话、阶段、登录态与在跑任务。
 - **MCP 工具扩充**：新增 `browser_status`、`await_human`、`run_script`。
