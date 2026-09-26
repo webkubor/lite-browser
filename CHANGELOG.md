@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## [1.3.0] - 2026-09-26
+
+> **一句话摘要**：系统 Chrome 凭据安全解密提取（零密码交互）与富文本多行键盘注入管线。
+
+### ✨ 新增特性 (What's New)
+- **系统 Chrome 登录态安全提取 (`cookie pull-system`)**：新增 `lite-browser cookie pull-system [domain]`，支持从 macOS Keychain 动态检索凭据，基于 AES-128-CBC 解密 Chrome SQLite 数据库并剥离 32 字节 HMAC 校验头，日常已登录网站 Cookie 秒级导入 CDP 会话，零扫码交互。
+- **富文本多行注入管线**：`type` 原子动作全面重构，新增 `Shift+Enter` (modifier 8) 逐行物理击键调度，彻底解决 Twitter/X、掘金、飞书等基于 Lexical/Draft.js 现代富文本编辑器在多段落输入时被截断或单行覆盖的难题。
+
+### ⚡️ 体验与性能优化 (Improvements)
+- **DOM 内容安全清空**：`type` 操作在注入前自动识别 `contenteditable` 容器，通过 `Selection.selectAllChildren` + `document.execCommand('delete')` 执行物理清空，杜绝多次键入时的文本重复追加。
+- **轻量编译构建**：Bun 单二进制静态打包耗时仅 197ms，单文件交付，零外部依赖。
+
+### 🐛 缺陷修复 (Bug Fixes)
+- 修复 macOS 系统 Chrome Cookie 数据库文件处于活跃锁定状态时读取失败的问题（引入临时 DB 快照隔离读取）。
+- 修复多段落富文本键入时回车事件被某些编辑器状态机误判为立即发送的缺陷。
+
+### ⚠️ 破坏性变更与迁移 (Breaking Changes & Migration)
+无破坏性变更（100% 向后兼容）。
+
+### 📦 安装与升级 (Install & Upgrade)
+```bash
+# 全局更新构建
+cd ~/dev/agent-infra/lite-browser && bun run build
+# 或通过一键脚本安装
+curl -fsSL https://raw.githubusercontent.com/webkubor/lite-browser/main/install.sh | bash
+```
+
+---
+
 ## v1.2.0 (2026-09-25)
 
 **核心突破：多 Agent 身份感知隔离 + 跨 Agent 凭据与登录态智能复用 (免重复扫码) + 全景诊断工具**

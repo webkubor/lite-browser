@@ -14,7 +14,7 @@ import { McpServer } from './mcp.js';
 import { SessionRegistry } from './registry.js';
 
 const USAGE = `
-🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.2.0)
+🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v1.3.0)
 
 基础操作:
   lite-browser open <url> [flags]          打开网页建立会话 (默认有头，支持持久化 profile)
@@ -23,7 +23,7 @@ const USAGE = `
       [--temp]                             使用临时临时会话 (退出后不持久化)
   lite-browser snapshot [--json]           提取页面可交互元素并进行 [@1] 编号
   lite-browser click <@id|selector>        点击指定元素（支持 @编号 或 CSS 选择器）
-  lite-browser type <@id|selector> <text>  在指定元素中键入文本
+  lite-browser type <@id|selector> <text>  在指定元素中键入文本 (支持富文本与多行输入)
   lite-browser hover <@id|selector>        悬停在指定元素上方以触发下拉菜单或状态
   lite-browser press <key>                 按下特殊按键（Enter, Tab, Escape, Backspace 等）
   lite-browser select <@id|sel> <val>      在下拉选择框 (<select>) 中选取指定值
@@ -75,8 +75,10 @@ SOP 智能沉淀、自进化与团队共享:
 Cookie 与 Profile 管理:
   lite-browser cookie export [domain]      导出当前会话的 Cookies [--out <path>]
   lite-browser cookie import <file>        将 Cookie 文件导入当前会话
+  lite-browser cookie pull-system [domain] 从系统 Chrome 安全解密提取并注入 Cookies (免输密码)
   lite-browser cookie clear                清理当前会话的 Cookies
   lite-browser profile list                列出所有持久化的用户 Profile
+
 
 AI 插件化扩展服务:
   lite-browser mcp                         启动 Model Context Protocol (MCP) STDIO 服务
@@ -720,11 +722,16 @@ async function main() {
           }
           const res = await CookieManager.import(file);
           console.log(`✅ 成功导入 ${res.count} 条 Cookies`);
+        } else if (sub === 'pull-system' || sub === 'pull') {
+          const domain = args[2] && !args[2].startsWith('--') ? args[2] : undefined;
+          console.log(`🔐 正在从系统 Chrome 安全解密提取 Cookies${domain ? ` (匹配域名: ${domain})` : ''}...`);
+          const res = await CookieManager.pullFromSystem(domain);
+          console.log(`✅ 成功从系统 Chrome 提取并注入 ${res.count} 条 Cookies 至当前会话！`);
         } else if (sub === 'clear') {
           await CookieManager.clear();
           console.log('✅ 已清除当前会话的所有 Cookies');
         } else {
-          console.error(`❌ 未知 cookie 子命令: ${sub}。支持: export, import, clear`);
+          console.error(`❌ 未知 cookie 子命令: ${sub}。支持: export, import, pull-system, clear`);
         }
         break;
       }

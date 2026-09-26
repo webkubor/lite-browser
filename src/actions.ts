@@ -263,22 +263,43 @@ export class BrowserActions {
   async type(target: string, text: string): Promise<{ ok: boolean; target: string; text: string }> {
     const clickRes = await this.click(target);
 
-    // 先清空已有内容，避免重复追加
+    // 先安全清空已有内容，兼容普通 input/textarea 与 contenteditable 富文本编辑器
     await this.client.send('Runtime.evaluate', {
       expression: `(() => {
         const el = document.activeElement || document.querySelector(${JSON.stringify(clickRes.selector)});
         if (el) {
-          if ('select' in el && typeof el.select === 'function') {
-            el.select();
+          if ('select' in el && typeof (el as any).select === 'function') {
+            (el as any).select();
+          } else if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+            const sel = window.getSelection();
+            if (sel) {
+              sel.selectAllChildren(el);
+              document.execCommand('delete');
+            }
           } else {
-            el.value = '';
+            (el as any).value = '';
           }
         }
       })()`,
     });
 
-    // 使用 CDP 原生 Input.insertText 插入文本（解决逐字符模拟与 value 赋值双重输入的 BUG）
-    await this.client.send('Input.insertText', { text });
+    // 若包含换行符（如多段落推文/富文本），通过逐行 Input.insertText + Shift+Enter 注入，避免被 Lexical/Draft.js 状态机覆盖
+    if (text.includes('\n')) {
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].length > 0) {
+          await this.client.send('Input.insertText', { text: lines[i] });
+        }
+        if (i < lines.length - 1) {
+          await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 8 });
+          await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 8 });
+          await new Promise((r) => setTimeout(r, 30));
+        }
+      }
+    } else {
+      // 单行直接 CDP 原生 Input.insertText 插入
+      await this.client.send('Input.insertText', { text });
+    }
 
     // 确保 Vue / React 等双向绑定受控组件感知到变更
     await this.client.send('Runtime.evaluate', {
@@ -290,6 +311,7 @@ export class BrowserActions {
         }
       })()`,
     });
+
 
     RecipeEngine.recordAction({
       type: 'type',

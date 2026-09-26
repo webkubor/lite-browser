@@ -1,6 +1,6 @@
 {
   "name": "lite-browser",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "极致轻量、零常驻、毫秒级响应的自研浏览器操控工具，专为 AI Agent 与自动化设计",
   "type": "module",
   "bin": {
