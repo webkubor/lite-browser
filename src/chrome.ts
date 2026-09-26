@@ -3,7 +3,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, readlinkSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, readlinkSync, lstatSync, accessSync, statSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
 import { STATE_ROOT } from './paths.js';
@@ -92,6 +92,90 @@ function defaultIsAlive(pid: number): boolean {
   }
 }
 
+export interface BrowserCandidate {
+  label: string;
+  path: string;
+}
+
+/**
+ * 候选浏览器的**优先级顺序**：前面的先采用。
+ *
+ * 这里只放「用户真会装、且真能驱动」的东西 —— 全部是 Chromium 内核、全部支持
+ * `--remote-debugging-port`。Safari 不在列表里，因为它只有 WebDriver 没有 CDP，
+ * 放进来只会让人以为「装了 Safari 就能用」。
+ *
+ * 之所以导出成纯函数：顺序是这个模块最容易被顺手改坏的东西（history：ego lite
+ * 曾经排第一，退役后没人动它）。顺序必须能被测试直接断言，而不是靠读注释。
+ */
+export function browserCandidates(home: string = homedir()): BrowserCandidate[] {
+  return [
+    { label: 'Google Chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' },
+    { label: 'Google Chrome', path: join(home, 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome') },
+    { label: 'Chrome Beta', path: '/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta' },
+    { label: 'Chrome Dev', path: '/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev' },
+    { label: 'Chrome Canary', path: '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary' },
+    { label: 'Chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium' },
+    { label: 'Brave', path: '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser' },
+    { label: 'Microsoft Edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' },
+    ...chromeForTestingCandidates(home),
+  ];
+}
+
+/**
+ * 兜底：Playwright 下载的 Chrome for Testing。
+ *
+ * 它排在最后，因为它是 `npx playwright install` 的副产物、随时可能被清掉，而且里面
+ * 没有任何用户登录态。但「最后」不等于「不要」—— 机器上一个浏览器都没有的时候，
+ * 有它就能干活，没它就只能干等（2026-09-26 就是靠它把 lite-browser 验证通的）。
+ */
+function chromeForTestingCandidates(home: string): BrowserCandidate[] {
+  const root = join(home, 'Library/Caches/ms-playwright');
+  let versions: string[];
+  try {
+    versions = readdirSync(root)
+      .filter((n) => /^chromium-\d+$/.test(n))
+      .sort((a, b) => Number(b.slice('chromium-'.length)) - Number(a.slice('chromium-'.length)));
+  } catch (_) {
+    return [];
+  }
+
+  const out: BrowserCandidate[] = [];
+  for (const v of versions) {
+    // Playwright 按架构分目录：Apple Silicon 是 chrome-mac-arm64，Intel 是 chrome-mac。
+    for (const arch of ['chrome-mac-arm64', 'chrome-mac']) {
+      out.push({
+        label: `Chrome for Testing (${v})`,
+        path: join(root, v, arch, 'Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * 「文件存在」不等于「它能跑」。
+ *
+ * 这台机器上真实发生过：`/Applications/Google Chrome.app` 里 1.4G 的 Framework 完好，
+ * 只有 `Contents/MacOS/` 是个空目录（启动器 stub 被删了）。用 existsSync 判断的代码
+ * 会以为浏览器在、然后拿着一个空的 app 去 open。必须同时要求「是文件」且「可执行」。
+ */
+function isExecutableFile(p: string): boolean {
+  try {
+    if (!statSync(p).isFile()) return false;
+    accessSync(p, constants.X_OK);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+export function pickBrowser(
+  candidates: BrowserCandidate[],
+  isUsable: (path: string) => boolean = isExecutableFile,
+): BrowserCandidate | undefined {
+  return candidates.find((c) => isUsable(c.path));
+}
+
 export class ChromeManager {
   public port: number;
   private registry: SessionRegistry;
@@ -104,46 +188,37 @@ export class ChromeManager {
   /**
    * 挑一个 Chromium 系浏览器来驱动。
    *
-   * **ego lite 排在 Google Chrome 前面**，这是刻意的：lite-browser 拉起的实例会在
-   * Dock 里多出一个图标，而它和用户自己那个 Chrome **图标一模一样**，分不清哪个窗口
-   * 是 agent 在用、哪个是人在用（owner 2026-09-25 的原话：「我现在本地开好几个
-   * Chrome，那个 Chrome 图标都一模一样的」）。
+   * 历史上这里把 **ego lite 排在 Google Chrome 前面**，理由是 Dock 图标能区分
+   * （见 git 历史）。那条理由随 ego lite 退役一起失效了 —— owner 已卸载 ego lite
+   * （2026-09-26：「/Applications/ego lite.app 我删了」），它的路径现在只会让
+   * 探测白跑一趟，并且把报错文案写成一个用户根本装不回来的名字。
    *
-   * 试过给 Chrome 做换图标的 .app 包装，两种都不行：`exec` 转发后进程归属跟着真
-   * Chrome 的 bundle 走，Dock 图标不变；软链式副本会让 Chrome Helper 加载 Framework
-   * 时被 sandbox 拦死（`dlopen ... file system sandbox blocked open()`）。要真换图标
-   * 只能整包复制 600MB 再重签名，不值当。
-   *
-   * 换个浏览器就白拿这件事：ego lite 本机已装（Chromium 152 内核，实测
-   * `--remote-debugging-port` 完全可用），图标是黑白椭圆，和 Chrome 的彩色圆一眼区分，
-   * 且 agent 的浏览数据与用户自己的 Chrome 彻底隔离。零新增体积。
-   *
-   * 要强制指定浏览器（换 Brave / 换回 Chrome / CI 里指到别处）：设环境变量
-   * `LITE_BROWSER_BROWSER=<可执行文件绝对路径>`。
+   * 换浏览器只需设 `LITE_BROWSER_BROWSER=<可执行文件绝对路径>`。
    */
   static getChromePath(): string {
     const override = process.env.LITE_BROWSER_BROWSER;
     if (override) {
-      if (!existsSync(override)) {
-        throw new Error(`LITE_BROWSER_BROWSER 指向的文件不存在：${override}`);
+      if (!isExecutableFile(override)) {
+        throw new Error(`LITE_BROWSER_BROWSER 指向的文件不存在或不可执行：${override}`);
       }
       return override;
     }
 
-    const paths = [
-      '/Applications/ego lite.app/Contents/MacOS/ego lite',
-      `${homedir()}/Applications/ego lite.app/Contents/MacOS/ego lite`,
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      `${homedir()}/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    ];
+    const hit = pickBrowser(browserCandidates());
+    if (hit) return hit.path;
 
-    for (const p of paths) {
-      if (existsSync(p)) return p;
-    }
-    throw new Error('未在系统找到 ego lite / Google Chrome / Chromium，请确认已安装。');
+    // 报错必须列出「真的找过哪些地方」。原来那句
+    // 「未在系统找到 ego lite / Google Chrome / Chromium」在 ego lite 卸载后
+    // 就变成了误导 —— 用户会去装一个已经退役的浏览器。
+    throw new Error(
+      [
+        '未在系统找到可驱动的 Chromium 系浏览器。已查找：',
+        ...browserCandidates().map((c) => `  ${c.label.padEnd(22)} ${c.path}`),
+        '',
+        '  Safari 不可用：它只有 WebDriver，没有 CDP，lite-browser 无法驱动。',
+        '  也可以直接指定：LITE_BROWSER_BROWSER=<可执行文件绝对路径>',
+      ].join('\n'),
+    );
   }
 
   async checkPort(): Promise<any | null> {
