@@ -778,7 +778,7 @@ async function main() {
            */
           const name = args[2];
           if (!name) {
-            console.error('❌ 用法: lite-browser sop adopt <name> --script <脚本路径> [--intent <意图>] [--domain <域名>] [--desc <描述>]');
+            console.error('❌ 用法: lite-browser sop adopt <name> --script <脚本路径> [--args "<额外参数>"] [--intent <意图>] [--domain <域名>] [--desc <描述>] [--frequency <频次>]');
             process.exit(EXIT_USAGE);
           }
           const getFlag = (flag: string): string | undefined => {
@@ -802,6 +802,12 @@ async function main() {
           const runner = ext === '.py' ? 'python3' : ext === '.sh' ? 'bash' : ext === '.ts' ? 'bun' : 'node';
           const relScript = scriptPath;
 
+          /**
+           * 真实脚本几乎都带子命令（`xhs-collect.py collect all`、`foo.sh --strict`），
+           * 不带参数就收编等于收编了一个跑不起来的壳子。支持引号，够日常用。
+           */
+          const extraArgs = (getFlag('--args') || '').match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((s) => s.replace(/^["']|["']$/g, '')) ?? [];
+
           const asset = discoverAssets(process.cwd()).find((a) => a.name === name || a.path.endsWith(scriptPath));
           const intent = getFlag('--intent') || asset?.intents.join(', ');
           const domain = getFlag('--domain') || asset?.domains[0];
@@ -813,20 +819,22 @@ async function main() {
             intent,
             domain,
             scope: 'project',
+            frequency: getFlag('--frequency'),
           }, undefined, [
             {
               step: 1,
               action: 'exec',
               command: runner,
-              args: [relScript],
-              description: `执行 ${runner} ${relScript}`,
+              args: [relScript, ...extraArgs],
+              description: `执行 ${runner} ${[relScript, ...extraArgs].join(' ')}`,
             },
           ]);
 
           console.log(`\n✅ 已收编外部脚本为 SOP "${sop.name}" (v${sop.version}, 作用域: ${sop.scope})`);
-          console.log(`   脚本  : ${runner} ${relScript}`);
+          console.log(`   脚本  : ${runner} ${[relScript, ...extraArgs].join(' ')}`);
           console.log(`   意图  : ${sop.match.intents.join(', ') || '（无）'}`);
           console.log(`   域名  : ${sop.match.domains.join(', ') || '（无）'}`);
+          console.log(`   频次  : ${sop.schedule.frequency || 'manual'}`);
           console.log(`   运行  : lite-browser sop run ${sop.name}`);
           console.log(`   提醒  : 这条 SOP 走的是 exec，执行时会真实调用你的脚本。\n`);
         } else if (sub === 'delete') {
