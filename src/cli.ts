@@ -5,6 +5,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { ChromeManager } from './chrome.js';
 import { BrowserActions } from './actions.js';
 import { RecipeEngine } from './recipe.js';
@@ -128,12 +129,24 @@ AI 插件化扩展服务:
   [--agent <name>]                         显式指定当前调用 Agent 身份 (如 gemini, claude-code, codex)
   [--port <number>]                        显式绑定指定 CDP 调试端口
   [--reuse]                                跨 Agent 复用**已确认**的登录态 (免扫码重复登录)
+
+接管已有浏览器 profile (open 命令):
+  [--user-data-dir <path>]                 直接接管已有的 Chromium user-data-dir，
+                                           不改动、不迁移其中的登录态
+                                           (例: "~/Library/Application Support/Citro Labs/ego lite")
+  [--profile-directory <name>]             在该 user-data-dir 里选子 profile
+                                           (Chromium 原生语义: Default / "Profile 1" …)
+  说明: --profile <name> 用的是 lite-browser 自己的独立 profile 目录
+        (~/.lite-browser/profiles/<name>)；--user-data-dir 是接管别人的目录。
+        想复用某个浏览器里**已经登录好**的账号，用后者。
 `;
 
 async function main() {
   const rawArgs = process.argv.slice(2);
   let explicitAgent: string | undefined;
   let explicitPort: number | undefined;
+  let explicitUserDataDir: string | undefined;
+  let explicitProfileDirectory: string | undefined;
   let reuse = false;
 
   const args: string[] = [];
@@ -142,6 +155,10 @@ async function main() {
       explicitAgent = rawArgs[++i];
     } else if (rawArgs[i] === '--port' && rawArgs[i + 1]) {
       explicitPort = parseInt(rawArgs[++i], 10);
+    } else if (rawArgs[i] === '--user-data-dir' && rawArgs[i + 1]) {
+      explicitUserDataDir = rawArgs[++i];
+    } else if (rawArgs[i] === '--profile-directory' && rawArgs[i + 1]) {
+      explicitProfileDirectory = rawArgs[++i];
     } else if (rawArgs[i] === '--reuse') {
       reuse = true;
     } else {
@@ -372,13 +389,20 @@ async function main() {
         const profile = profIdx >= 0 ? args[profIdx + 1] : undefined;
 
         const agent = SessionRegistry.detectCurrentAgent(explicitAgent);
-        const effectiveProfile = temp ? '临时' : (profile ?? (agent !== 'default' ? `agent-${agent}` : 'default'));
+        const adoptedLabel = explicitUserDataDir
+          ? `${basename(explicitUserDataDir)}${explicitProfileDirectory ? `/${explicitProfileDirectory}` : ''}`
+          : undefined;
+        const effectiveProfile = temp
+          ? '临时'
+          : (profile ?? adoptedLabel ?? (agent !== 'default' ? `agent-${agent}` : 'default'));
 
         console.log(`🌐 正在打开 ${url} (模式: ${headless ? '无头' : '有头'}, Profile: ${effectiveProfile}, Agent: ${agent}${reuse ? ', 智能复用: 是' : ''})...`);
         const browser = await BrowserActions.launchOrConnect({
           url,
           headless,
           profile,
+          profileDirectory: explicitProfileDirectory,
+          userDataDir: explicitUserDataDir,
           temp,
           port: explicitPort,
           agent: explicitAgent,

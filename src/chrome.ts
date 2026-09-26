@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { STATE_ROOT } from './paths.js';
 import type { SessionState, LaunchOptions, AgentSessionRecord, HandoffState, SessionPhase } from './types.js';
 import { SessionRegistry } from './registry.js';
@@ -95,7 +95,7 @@ export class ChromeManager {
   }
 
   async getOrLaunch(options: LaunchOptions & { temp?: boolean } = {}): Promise<SessionState> {
-    const { headless = false, url = 'about:blank', userDataDir, profile, temp = false, agent: explicitAgent, reuse = false } = options;
+    const { headless = false, url = 'about:blank', userDataDir, profileDirectory, profile, temp = false, agent: explicitAgent, reuse = false } = options;
 
     const agent = SessionRegistry.detectCurrentAgent(explicitAgent);
 
@@ -164,7 +164,15 @@ export class ChromeManager {
 
     let versionInfo = await this.checkPort();
 
-    const profileName = profile || (temp ? undefined : (agent !== 'default' ? `agent-${agent}` : 'default'));
+    /**
+     * 接管已有 user-data-dir 时，用「目录名/子 profile」当注册表里的 profile 标识，
+     * 好让 `session list` 显示的是 `ego lite/Profile 1` 这种能认出来的东西，
+     * 而不是一个凭空的 default。
+     */
+    const adoptedProfile = userDataDir
+      ? `${basename(userDataDir)}${profileDirectory ? `/${profileDirectory}` : ''}`
+      : undefined;
+    const profileName = profile || adoptedProfile || (temp ? undefined : (agent !== 'default' ? `agent-${agent}` : 'default'));
     let effectiveUserDataDir = userDataDir;
 
     if (!effectiveUserDataDir) {
@@ -199,6 +207,9 @@ export class ChromeManager {
       }
 
       args.push(`--user-data-dir=${effectiveUserDataDir}`);
+      // Chromium 只在 user-data-dir 已有多个 profile 时才认这个参数；
+      // 接管 ego lite 那类多账号目录时，它就是「选哪个号」的开关。
+      if (profileDirectory) args.push(`--profile-directory=${profileDirectory}`);
       args.push(url);
 
       const proc = spawn(chromePath, args, {

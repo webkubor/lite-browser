@@ -139,7 +139,17 @@ export interface SessionState extends AgentSessionRecord {}
 export interface LaunchOptions {
   headless?: boolean;
   url?: string;
+  /**
+   * 接管一个**已存在**的 Chromium user-data-dir，而不是用 lite-browser 自己的。
+   *
+   * 为什么必须能接管：真实登录态常常躺在别人的 user-data-dir 里（例如 ego lite
+   * 的 `~/Library/Application Support/Citro Labs/ego lite`，三个小红书号就在那）。
+   * 只认自己的 PROFILES_DIR 等于要求用户把所有账号重新登录一遍 —— 那不是集成，
+   * 是让人重做一遍。
+   */
   userDataDir?: string;
+  /** 在 userDataDir 里选子 profile（Chromium 原生语义：Default / "Profile 1" …）。 */
+  profileDirectory?: string;
   profile?: string;
   port?: number;
   agent?: string;

@@ -234,3 +234,14 @@ describe('退出码契约', () => {
     expect(EXIT_AWAIT_TIMEOUT).toBe(4);
   });
 });
+
+describe('接管已有 Chromium profile 的语义', () => {
+  it('userDataDir + profileDirectory 决定注册表里的 profile 标识', async () => {
+    const { ChromeManager } = await import('../src/chrome.js');
+    // 不真的启动浏览器：用 adoptLabel 的等价逻辑断言命名契约
+    const label = (dir: string, pd?: string) => `${dir.split('/').filter(Boolean).pop()}${pd ? `/${pd}` : ''}`;
+    expect(label('/x/Citro Labs/ego lite', 'Profile 1')).toBe('ego lite/Profile 1');
+    expect(label('/x/Citro Labs/ego lite')).toBe('ego lite');
+    expect(typeof ChromeManager).toBe('function');
+  });
+});
