@@ -1,0 +1,10 @@
+# 测试隔离：绝不让单元测试写进用户的真实 ~/.lite-browser。
+#
+# 之前 task 测试会把 task_test_123 写进用户真实的 task list，registry 测试会往
+# 真实注册表里塞假 Agent —— 于是 `lite-browser task list` 的输出不可信。
+# 诊断工具的输出一旦不可信，整个交接协议就没意义了。
+#
+# 注意必须是 [test].preload：顶层 preload 在 bun 1.4 对 `bun test` 不生效，
+# 写了会静默不执行 —— 那比不写更糟，你会以为已经隔离了。
+[test]
+preload = ["./test/setup.ts"]

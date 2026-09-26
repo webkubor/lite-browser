@@ -3,11 +3,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentSessionRecord } from './types.js';
+import { STATE_ROOT } from './paths.js';
 
-const CONFIG_DIR = join(homedir(), '.lite-browser');
+const CONFIG_DIR = STATE_ROOT;
 const REGISTRY_FILE = join(CONFIG_DIR, 'session-registry.json');
 const BASE_PORT = 9222;
 

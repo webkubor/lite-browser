@@ -3,15 +3,15 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, openSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { BrowserActions } from './actions.js';
 import { RecipeEngine } from './recipe.js';
 import { renderHandoffCard } from './handoff.js';
 import { executeSteps, needsBrowser } from './runner.js';
+import { STATE_ROOT } from './paths.js';
 
-export const TASKS_DIR = join(homedir(), '.lite-browser', 'tasks');
+export const TASKS_DIR = join(STATE_ROOT, 'tasks');
 export const TASK_LOGS_DIR = join(TASKS_DIR, 'logs');
 const TASKS_FILE = join(TASKS_DIR, 'index.json');
 

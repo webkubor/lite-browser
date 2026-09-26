@@ -3,12 +3,12 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { STATE_ROOT } from './paths.js';
 import type { SOP, SOPMatch, SOPSchedule, SOPParameter, SOPChangelog, RecipeStep, TrajectoryAction } from './types.js';
 import { SessionRegistry } from './registry.js';
 
-export const GLOBAL_RECIPES_DIR = join(homedir(), '.lite-browser', 'recipes');
+export const GLOBAL_RECIPES_DIR = join(STATE_ROOT, 'recipes');
 export const LOCAL_RECIPES_DIR = join(process.cwd(), '.lite-browser', 'recipes');
 
 /**
@@ -18,7 +18,7 @@ export const LOCAL_RECIPES_DIR = join(process.cwd(), '.lite-browser', 'recipes')
  * 各自的 open/click/type 会交错写进同一条轨迹，`done` 沉淀出来的 SOP 是两件事
  * 拼在一起的怪物。这跟会话指针全局共用是同一类 bug。
  */
-const TRAJECTORY_DIR = join(homedir(), '.lite-browser', 'trajectory');
+const TRAJECTORY_DIR = join(STATE_ROOT, 'trajectory');
 
 export function trajectoryFileFor(agent?: string): string {
   const a = String(agent || RecipeEngine.currentActor() || 'default').replace(/[^a-zA-Z0-9._-]/g, '_');

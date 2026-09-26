@@ -6,13 +6,14 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { STATE_ROOT } from './paths.js';
 import type { SessionState, LaunchOptions, AgentSessionRecord, HandoffState, SessionPhase } from './types.js';
 import { SessionRegistry } from './registry.js';
 import { CdpClient } from './cdp.js';
 import { AUTH_PROBE_SCRIPT } from './handoff.js';
 
 const DEFAULT_PORT = 9222;
-export const PROFILES_DIR = join(homedir(), '.lite-browser', 'profiles');
+export const PROFILES_DIR = join(STATE_ROOT, 'profiles');
 
 /**
  * 会话指针目录：**一 Agent 一文件**。
@@ -21,7 +22,7 @@ export const PROFILES_DIR = join(homedir(), '.lite-browser', 'profiles');
  * 并行时后开的会话会覆盖前一个的指针，「当前会话是谁」这个前提本身就不成立 ——
  * 这正是「不知道现在处在什么状态」最底层的原因。
  */
-const SESSIONS_DIR = join(homedir(), '.lite-browser', 'sessions');
+const SESSIONS_DIR = join(STATE_ROOT, 'sessions');
 const LEGACY_SESSION_FILE = '/tmp/lite-browser-session.json';
 
 function sessionFileFor(agent: string): string {

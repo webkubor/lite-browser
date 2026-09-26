@@ -9,7 +9,7 @@
  * 和用户自己的 Chrome 在 Dock 里图标完全一样，分不清哪个是 agent 在用。
  * 这条断言一旦红，说明顺序被人调回去了。
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { ChromeManager } from '../src/chrome.js';
 

@@ -1,13 +1,16 @@
 import { describe, it, expect, beforeEach, afterAll } from 'bun:test';
 import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { SessionRegistry } from '../src/registry.js';
+import { STATE_ROOT } from '../src/paths.js';
 import type { AgentSessionRecord } from '../src/types.js';
 
 describe('SessionRegistry & Multi-Agent Identity Isolation', () => {
   const registry = new SessionRegistry();
-  const testFile = join(homedir(), '.lite-browser', 'session-registry.json');
+  // 必须跟着 STATE_ROOT 走（测试由 test/setup.ts 指向临时目录）。
+  // 曾经硬编码 homedir()，于是测试直接改写用户真实注册表 —— 跑一次测试，
+  // `lite-browser session list` 就开始显示假 Agent。
+  const testFile = join(STATE_ROOT, 'session-registry.json');
   let originalContent = '';
 
   beforeEach(() => {

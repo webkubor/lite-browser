@@ -21,6 +21,7 @@
 - **MCP 工具扩充**：新增 `browser_status`、`await_human`、`run_script`。
 
 ### 🐛 缺陷修复 (Bug Fixes)
+- **单元测试不再污染真实状态**：此前 `bun test` 会把 `task_test_123` 写进用户真实的 task list、把假 Agent 塞进真实会话注册表（registry 测试甚至硬编码了 `homedir()` 路径），导致 `lite-browser task list` / `session list` 的输出不可信 —— 诊断输出不可信，整个交接协议就没有意义。新增 `LITE_BROWSER_HOME` 覆盖状态根目录，并用 `bunfig.toml` 的 `[test].preload` 在测试启动时把状态指向临时目录。
 - **修复编译版二进制无法拉起委派 Worker**（长期存在的发布级缺陷）：旧代码 `spawn(process.execPath, [process.argv[1], '_task_worker', ...])` 在单文件编译产物下会把 `/$bunfs/root/lite-browser` 重复插入 argv，Worker 启动即打印 USAGE 并退出，**委派功能在正式二进制上等于不可用**。新增 `selfEntryArgs()` 按编译/非编译两种运行时分别推导入口参数。
 - 修复 `sop run --dry-run` 输出 `undefined 步`（导入的 JSON 没有 `stepCount` 字段）。
 - 修复 `sop run --dry-run` 污染成功率统计（dry-run 不再计入 `recordRun`）。

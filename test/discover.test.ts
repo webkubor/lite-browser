@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test } from 'bun:test';
 import { describeScript } from '../src/discover.js';
 
 describe('describeScript —— 脚本标题提取', () => {
