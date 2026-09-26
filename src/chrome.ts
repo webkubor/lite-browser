@@ -3,7 +3,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync, readlinkSync, lstatSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
 import { STATE_ROOT } from './paths.js';
@@ -28,6 +28,68 @@ const LEGACY_SESSION_FILE = '/tmp/lite-browser-session.json';
 function sessionFileFor(agent: string): string {
   const safe = String(agent || 'default').replace(/[^a-zA-Z0-9._-]/g, '_');
   return join(SESSIONS_DIR, `${safe}.json`);
+}
+
+/**
+ * 启动超时最常见、也最容易误判的真实原因：目标 user-data-dir 已被另一个
+ * **没有开放调试端口**的实例占用。
+ *
+ * Chromium 的规则是「同一个 user-data-dir 只能有一个浏览器进程」—— 第二次启动会把
+ * 请求转交给已有实例然后自己退出，于是我们等的调试端口永远不会出现。报「启动失败」
+ * 等于把用户引向错误方向（他会去查 Chrome 装没装、端口占没占），而真正该做的只有
+ * 一件事：先把那个实例关掉，或改用它的调试端口 attach。
+ *
+ * 导出成自由函数（而不是类私有方法）是为了能直接对着隔离目录跑回归测试 ——
+ * 这类「报错文案指错方向」的缺陷，只有测试才能钉住。
+ */
+export function diagnoseSingletonLock(
+  userDataDir?: string,
+  isAlive: (pid: number) => boolean = defaultIsAlive,
+): string {
+  if (!userDataDir) return '';
+  try {
+    const lock = join(userDataDir, 'SingletonLock');
+
+    // 必须用 lstat 而不是 existsSync：SingletonLock 是指向 `<host>-<pid>` 的符号链接，
+    // 而那个名字**并不是真实文件**。existsSync 会跟随链接、对悬空链接返回 false ——
+    // 于是这段诊断在最该生效的真实场景里永远不生效（这正是回归测试钉出来的缺陷）。
+    lstatSync(lock);
+
+    // Chromium 把 SingletonLock 做成指向 `<hostname>-<pid>` 的符号链接。
+    const target = readlinkSync(lock);
+    const ownerPid = Number(target.slice(target.lastIndexOf('-') + 1));
+    if (!Number.isInteger(ownerPid) || ownerPid <= 0) return '';
+
+    // 残留锁（进程已死）不是本次失败的原因，不能拿它误导用户。
+    if (!isAlive(ownerPid)) return '';
+
+    return [
+      '',
+      `🔒 真正的原因：这个 user-data-dir 已被 PID ${ownerPid} 占用，而它没有开放调试端口。`,
+      `   目录: ${userDataDir}`,
+      '',
+      '   Chromium 同一个 user-data-dir 只允许一个浏览器进程：第二次启动会把请求转交给',
+      '   已有实例后自行退出，所以本进程要等的调试端口永远不会出现。',
+      '',
+      '   三种选择：',
+      '     1) 那个实例若已带 --remote-debugging-port，直接 attach（推荐，无损）',
+      '          lite-browser --port <它的端口> <命令>',
+      '     2) 关掉它再重试；登录态存在 profile 目录里，不会丢',
+      `          kill ${ownerPid}`,
+      '     3) 换一个没被占用的 user-data-dir',
+    ].join('\n');
+  } catch (_) {
+    return '';
+  }
+}
+
+function defaultIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 export class ChromeManager {
@@ -227,7 +289,7 @@ export class ChromeManager {
       }
 
       if (!versionInfo) {
-        throw new Error(`启动 Chrome 失败或端口 ${this.port} 未能在预期时间内响应`);
+        throw new Error(`启动 Chrome 失败或端口 ${this.port} 未能在预期时间内响应${diagnoseSingletonLock(effectiveUserDataDir)}`);
       }
     }
 
