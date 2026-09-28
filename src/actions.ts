@@ -8,6 +8,7 @@ import { ChromeManager } from './chrome.js';
 import { INJECTED_DOM_SCRIPT, formatSnapshot } from './dom.js';
 import { RecipeEngine } from './recipe.js';
 import { SessionRegistry } from './registry.js';
+import { DEFAULT_PORT } from './constants.js';
 import {
   AUTH_PROBE_SCRIPT,
   buildHandoff,
@@ -28,7 +29,7 @@ export class BrowserActions {
   }
 
   static async launchOrConnect(options: LaunchOptions & { temp?: boolean } = {}): Promise<BrowserActions> {
-    const mgr = new ChromeManager(options.port || 9222);
+    const mgr = new ChromeManager(options.port || DEFAULT_PORT);
     const session = await mgr.getOrLaunch(options);
     const client = new CdpClient(session.wsUrl);
     await client.connect();

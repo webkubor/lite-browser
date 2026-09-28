@@ -11,8 +11,8 @@ import type { SessionState, LaunchOptions, AgentSessionRecord, HandoffState, Ses
 import { SessionRegistry } from './registry.js';
 import { CdpClient } from './cdp.js';
 import { AUTH_PROBE_SCRIPT } from './handoff.js';
+import { DEFAULT_PORT } from './constants.js';
 
-const DEFAULT_PORT = 9222;
 export const PROFILES_DIR = join(STATE_ROOT, 'profiles');
 
 /**

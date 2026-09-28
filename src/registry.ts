@@ -6,10 +6,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentSessionRecord } from './types.js';
 import { STATE_ROOT } from './paths.js';
+import { BASE_PORT } from './constants.js';
 
 const CONFIG_DIR = STATE_ROOT;
 const REGISTRY_FILE = join(CONFIG_DIR, 'session-registry.json');
-const BASE_PORT = 9222;
 
 export class SessionRegistry {
   constructor() {
@@ -192,7 +192,8 @@ export class SessionRegistry {
     const all = this.getAll();
     const occupiedPorts = new Set(all.filter((r) => r.status === 'active').map((r) => r.port));
 
-    // 从 9222 开始探测未被占用的端口
+    // 从 BASE_PORT（见 constants.ts）开始探测未被占用的端口。
+    // 9222 已被 RESERVED_HUMAN_PORT 排除在区间外，扫不到人类浏览器。
     for (let p = BASE_PORT; p < BASE_PORT + 20; p++) {
       const alive = await this.pingPort(p);
       if (!occupiedPorts.has(p) && !alive) {
