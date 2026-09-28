@@ -11,8 +11,16 @@ export interface ExportCookieOptions {
 }
 
 export class CookieManager {
-  static async export(options: ExportCookieOptions = {}): Promise<{ count: number; cookies: any[]; file?: string }> {
-    const browser = await BrowserActions.connectToSession();
+  /**
+   * 目标会话（Agent 名或端口）。
+   *
+   * 必须由 CLI 把 --agent / --port 透传进来：CookieManager 直接调 connectToSession()
+   * 不带参数时，会在多个活跃会话里**随便挑一个** —— 于是 `--agent dsh` 被静默忽略，
+   * cookie 被注进了别人的浏览器，而命令照样报「✅ 成功注入 N 条」。
+   * 投错目标却报成功，比直接失败危险得多。
+   */
+  static async export(options: ExportCookieOptions = {}, target?: string | number): Promise<{ count: number; cookies: any[]; file?: string }> {
+    const browser = await BrowserActions.connectToSession(target);
     const cookies = await browser.getCookies();
 
     let filtered = cookies;
@@ -27,7 +35,7 @@ export class CookieManager {
     return { count: filtered.length, cookies: filtered, file: options.outFile };
   }
 
-  static async import(filePath: string): Promise<{ count: number }> {
+  static async import(filePath: string, target?: string | number): Promise<{ count: number }> {
     if (!existsSync(filePath)) {
       throw new Error(`找不到 Cookie 文件: ${filePath}`);
     }
@@ -38,21 +46,21 @@ export class CookieManager {
       throw new Error('Cookie 文件格式错误，必须为 Cookie 对象数组');
     }
 
-    const browser = await BrowserActions.connectToSession();
+    const browser = await BrowserActions.connectToSession(target);
     await browser.setCookies(cookies);
 
     return { count: cookies.length };
   }
 
-  static async clear(): Promise<void> {
-    const browser = await BrowserActions.connectToSession();
+  static async clear(target?: string | number): Promise<void> {
+    const browser = await BrowserActions.connectToSession(target);
     await browser.clearCookies();
   }
 
   /**
    * 从系统日常 Google Chrome 中安全解密并直接注入指定域名（或全量）的 Cookies
    */
-  static async pullFromSystem(domain?: string): Promise<{ count: number; domain?: string }> {
+  static async pullFromSystem(domain?: string, target?: string | number): Promise<{ count: number; domain?: string }> {
     const { execSync } = await import('node:child_process');
     const crypto = await import('node:crypto');
     const { homedir } = await import('node:os');
@@ -136,7 +144,7 @@ export class CookieManager {
     }
 
     if (cdpCookies.length > 0) {
-      const browser = await BrowserActions.connectToSession();
+      const browser = await BrowserActions.connectToSession(target);
       await browser.setCookies(cdpCookies);
     }
 

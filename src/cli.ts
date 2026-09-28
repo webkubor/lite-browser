@@ -1090,11 +1090,15 @@ async function main() {
       // Cookie 管理指令
       case 'cookie': {
         const sub = args[1];
+        // 与其余子命令保持一致：把 --agent / --port 透传下去。
+        // 此前 cookie 这条路完全不接，命令会在多个活跃会话里随便挑一个，
+        // 于是 `--agent dsh` 被静默忽略、cookie 注进了别人的浏览器，输出仍是「✅ 成功」。
+        const target = explicitPort || explicitAgent;
         if (sub === 'export') {
           const domain = args[2] && !args[2].startsWith('--') ? args[2] : undefined;
           const outIdx = args.indexOf('--out');
           const outFile = outIdx >= 0 ? args[outIdx + 1] : undefined;
-          const res = await CookieManager.export({ domain, outFile });
+          const res = await CookieManager.export({ domain, outFile }, target);
           if (outFile) {
             console.log(`✅ 已导出 ${res.count} 条 Cookies 至 ${outFile}`);
           } else {
@@ -1106,15 +1110,15 @@ async function main() {
             console.error('❌ 请提供 Cookie JSON 文件路径。');
             process.exit(1);
           }
-          const res = await CookieManager.import(file);
+          const res = await CookieManager.import(file, target);
           console.log(`✅ 成功导入 ${res.count} 条 Cookies`);
         } else if (sub === 'pull-system' || sub === 'pull') {
           const domain = args[2] && !args[2].startsWith('--') ? args[2] : undefined;
           console.log(`🔐 正在从系统 Chrome 安全解密提取 Cookies${domain ? ` (匹配域名: ${domain})` : ''}...`);
-          const res = await CookieManager.pullFromSystem(domain);
-          console.log(`✅ 成功从系统 Chrome 提取并注入 ${res.count} 条 Cookies 至当前会话！`);
+          const res = await CookieManager.pullFromSystem(domain, target);
+          console.log(`✅ 成功从系统 Chrome 提取并注入 ${res.count} 条 Cookies${target ? ` 至会话 ${target}` : ''}${res.count === 0 && domain ? '（该域在系统 Chrome 里没有可解密 Cookie）' : ''}！`);
         } else if (sub === 'clear') {
-          await CookieManager.clear();
+          await CookieManager.clear(target);
           console.log('✅ 已清除当前会话的所有 Cookies');
         } else {
           console.error(`❌ 未知 cookie 子命令: ${sub}。支持: export, import, pull-system, clear`);
