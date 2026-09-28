@@ -77,10 +77,15 @@ export class CookieManager {
     const tmpDb = `/tmp/chrome_cookies_sync_${Date.now()}.db`;
     execSync(`cp "${chromeCookiePath}" "${tmpDb}"`);
 
-    const whereClause = domain ? `WHERE host_key LIKE '%${domain}%'` : '';
+    // domain 会被拼进 WHERE。Chrome 域名里本不该出现引号，但「不该出现」不是保证 ——
+    // 一旦传进来的值带引号，query 会静默变成另一条 SQL，报出来的却是解密失败，
+    // 把排查方向直接带偏（这正是 sync-x-cookies 连续 8 次误报的那类问题）。
+    // 所以只放行 Chrome 域名真实用得到的字符，其余一律拒绝，而不是拼进去赌一把。
+    const domainPattern = domain ? sanitizeDomainPattern(domain) : undefined;
+    const whereClause = domainPattern ? `WHERE host_key LIKE '%${domainPattern}%'` : '';
     let raw = '';
     try {
-      raw = execSync(`sqlite3 "${tmpDb}" "SELECT host_key || '|||' || name || '|||' || path || '|||' || is_secure || '|||' || is_httponly || '|||' || hex(encrypted_value) FROM cookies ${whereClause};"`).toString();
+      raw = execSync(`sqlite3 "${tmpDb}" "SELECT host_key || '|||' || name || '|||' || path || '|||' || is_secure || '|||' || is_httponly || '|||' || expires_utc || '|||' || hex(encrypted_value) FROM cookies ${whereClause};"`).toString();
     } finally {
       try { unlinkSync(tmpDb); } catch (_) {}
     }
@@ -102,10 +107,20 @@ export class CookieManager {
 
     const lines = raw.trim().split('\n').filter(Boolean);
     const cdpCookies: any[] = [];
+    const nowSec = Math.floor(Date.now() / 1000);
     for (const line of lines) {
-      const [hostKey, name, path, isSecure, isHttpOnly, hexEnc] = line.split('|||');
+      const [hostKey, name, path, isSecure, isHttpOnly, expiresUtc, hexEnc] = line.split('|||');
       const val = decrypt(hexEnc);
       if (val) {
+        // 不带 expires 的 cookie 经 CDP 注入后是**会话 cookie**：浏览器一关就没，
+        // 于是「导入一次登录态」变成「每次重启 AI 浏览器都要重导一次」，
+        // 用户的原始诉求（AI 拉起的页面别再登出）根本没被解决。
+        // Chrome 的 expires_utc 是 1601-01-01 起的微秒，换算成 Unix 秒再设进去，
+        // 才会落进 profile 的 cookie store 真正持久化。
+        const expires = webkitToUnixSeconds(expiresUtc);
+        // 已过期的照搬过来只会变成一堆死 cookie，白白污染目标 profile。
+        if (expires !== undefined && expires <= nowSec) continue;
+
         cdpCookies.push({
           name,
           value: val,
@@ -113,6 +128,9 @@ export class CookieManager {
           path: path || '/',
           secure: isSecure === '1',
           httpOnly: isHttpOnly === '1',
+          // expires_utc = 0 是 Chrome 对「会话 cookie」的真实编码，保持不设 expires
+          // 才是对的 —— 这类 cookie 本来就没有持久化语义，不该被我们硬造一个。
+          ...(expires !== undefined ? { expires } : {}),
         });
       }
     }
@@ -124,5 +142,34 @@ export class CookieManager {
 
     return { count: cdpCookies.length, domain };
   }
+}
+
+/** Chrome/WebKit 纪元（1601-01-01）到 Unix 纪元（1970-01-01）的秒差。 */
+const WEBKIT_EPOCH_OFFSET_SEC = 11_644_473_600;
+
+/**
+ * 把 Chrome 的 `expires_utc`（1601 纪元微秒）换算成 CDP 要的 Unix 秒。
+ *
+ * 返回 `undefined` 表示「这条本来就是会话 cookie」（Chrome 用 0 编码），
+ * 调用方据此**不设** expires —— 硬造一个过期时间反而改变了 cookie 的语义。
+ */
+export function webkitToUnixSeconds(expiresUtc: string | undefined): number | undefined {
+  const micros = Number(expiresUtc);
+  if (!Number.isFinite(micros) || micros <= 0) return undefined;
+  const sec = Math.floor(micros / 1_000_000) - WEBKIT_EPOCH_OFFSET_SEC;
+  return sec > 0 ? sec : undefined;
+}
+
+/**
+ * 校验并放行可用于 host_key LIKE 的域名片段。
+ *
+ * 允许的是 Chrome host_key 真实出现过的形状：前导点、字母数字、连字符、点。
+ * 出现别的字符（引号、分号、空格…）就明确拒绝并报出原值，而不是拼进 SQL 赌一把。
+ */
+export function sanitizeDomainPattern(domain: string): string {
+  if (!/^[\w.-]+$/.test(domain)) {
+    throw new Error(`域名片段含非法字符，拒绝拼进 SQL: ${JSON.stringify(domain)}（只允许字母数字、点、连字符、下划线）`);
+  }
+  return domain;
 }
 

@@ -719,8 +719,15 @@ export class BrowserActions {
   }
 
   async getCookies(urls?: string[]): Promise<any[]> {
+    // Network.getCookies 的 urls 是**必填**。传 {} 不会抛错，只会返回空列表 ——
+    // 于是 `cookie export` 无论带不带域名都恒导出 0 条，还报「✅ 成功」，
+    // 把「没查到」和「本来就没有」混成一回事。排查 cookie 持久化时正是这个假
+    // 阴性把人带偏，差点把「导出坏了」当成「功能没生效」。
+    // 全量导出走 Storage.getCookies（无需 urls）；给了 urls 才用 Network.getCookies 过滤。
     await this.client.send('Network.enable');
-    const res = await this.client.send('Network.getCookies', urls ? { urls } : {});
+    const res = urls?.length
+      ? await this.client.send('Network.getCookies', { urls })
+      : await this.client.send('Storage.getCookies');
     return res.cookies || [];
   }
 
