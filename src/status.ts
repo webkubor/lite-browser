@@ -20,6 +20,44 @@ export interface BuildStatusOptions {
 
 const NON_TERMINAL = new Set(['pending', 'running', 'awaiting_human']);
 
+export interface ResolveAuthStateInput {
+  /** 探针给出的状态；探针没跑成时为 undefined。 */
+  probeState?: AuthState;
+  /** 探针取到的主机名。 */
+  probeDomain?: string | null;
+  /** 会话当前 URL，探针失败时的兜底来源。 */
+  sessionUrl?: string;
+  /** 人类用 `session mark-login` 显式登记为 verified 的域。 */
+  loginDomains?: readonly string[];
+}
+
+/**
+ * 探针判不出来时，别把人类已经给出的答案丢掉。
+ *
+ * 背景：探针只认「登录墙特征」和「常见已登录痕迹」（退出登录文案 / avatar 类名 /
+ * session cookie）。DSH 这类本地应用一个都不沾 —— 它用 URL 上的 ?token= 鉴权，
+ * document.cookie 是空的，页面也没有 avatar 或「退出登录」。于是探针永远返回
+ * unknown，`auth=unknown` 一直挂在 whoami 顶上，像坏了似的。
+ *
+ * 而 `session mark-login` 已经把人类的显式确认写进了 loginDomains，这里却完全
+ * 不读 —— 人答过了，探针的 unknown 把它盖掉。
+ *
+ * 修法只补这一处，不动探针的默认值：
+ *   - 探针报 anonymous（真登录墙）→ 仍然 anonymous，人为标记不许覆盖真墙；
+ *   - 探针报 unknown 且该域被人类 verified → authenticated（尊重显式判断）；
+ *   - 其余一律 unknown（「宁可 unknown，也不谎报」的原设计不变）。
+ */
+export function resolveAuthState(input: ResolveAuthStateInput): AuthState {
+  const probeState = input.probeState ?? 'unknown';
+  if (probeState !== 'unknown') return probeState;
+  const host = SessionRegistry.normalizeHost(input.probeDomain || input.sessionUrl);
+  if (!host) return 'unknown';
+  const verified = (input.loginDomains ?? []).some(
+    (entry) => SessionRegistry.normalizeHost(entry) === host
+  );
+  return verified ? 'authenticated' : 'unknown';
+}
+
 export async function buildSessionStatus(
   agentOrPort?: string | number,
   options: BuildStatusOptions = {}
@@ -83,7 +121,12 @@ export async function buildSessionStatus(
 
   const task = findActiveTask(session.agent);
 
-  const authState: AuthState = probe?.state ?? 'unknown';
+  const authState = resolveAuthState({
+    probeState: probe?.state,
+    probeDomain: probe?.domain,
+    sessionUrl: session.url,
+    loginDomains: session.loginDomains,
+  });
   const effectiveAuth = authState;
 
   return {

@@ -54,6 +54,30 @@ export class SessionRegistry {
   }
 
   /**
+   * 把「可能是完整 URL，也可能是裸主机名」的值归一成裸主机名。
+   *
+   * 为什么需要：verifiedDomains 里存的是 `127.0.0.1` 这种裸主机名，而
+   * extractDomain 只认带 scheme 的 URL —— `new URL('127.0.0.1')` 会抛异常返回
+   * null。拿 extractDomain 去比对 verifiedDomains，于是人工登记过的域永远匹配不上，
+   * 「你明明登记过了」和「工具说没登记过」同时成立。
+   *
+   * @param value - 完整 URL、带端口的 authority，或裸主机名。
+   * @returns 归一后的裸主机名；无法解析时返回小写原值。
+   */
+  static normalizeHost(value: string | undefined | null): string {
+    if (!value) return '';
+    const fromUrl = SessionRegistry.extractDomain(value);
+    if (fromUrl) return fromUrl.toLowerCase();
+    // 裸主机名 / 带端口的 authority：去掉 scheme、路径与端口。
+    return value
+      .trim()
+      .replace(/^[a-z]+:\/\//i, '')
+      .split('/')[0]
+      .split(':')[0]
+      .toLowerCase();
+  }
+
+  /**
    * 获取所有会话记录（含旧格式迁移）。
    *
    * 旧版本把「导航到过该域名」直接写进 loginDomains，于是「已记录登录域」

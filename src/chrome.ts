@@ -251,7 +251,11 @@ export class ChromeManager {
               targetPage = await this.newPage(url);
             }
 
-            const verdict = await ChromeManager.probeReusableLogin(targetPage, domain);
+            const verdict = await ChromeManager.probeReusableLogin(
+              targetPage,
+              domain,
+              reusable.verifiedDomains
+            );
             const reusedSession: SessionState = {
               agent,
               port: reusable.port,
@@ -423,7 +427,9 @@ export class ChromeManager {
    */
   static async probeReusableLogin(
     page: any,
-    domain: string
+    domain: string,
+    /** 人类用 `session mark-login` 显式登记过的域 —— 探针 unknown 时以它为准。 */
+    verifiedDomains?: readonly string[]
   ): Promise<{ ok: boolean; authenticated: boolean; message: string }> {
     if (!page?.webSocketDebuggerUrl) {
       return { ok: false, authenticated: false, message: `ℹ️ [免登录复用] ${domain} 的候选会话缺少可调试页面，跳过复用。` };
@@ -453,6 +459,19 @@ export class ChromeManager {
           ok: true,
           authenticated: false,
           message: `⚠️  [免登录复用] 未复用登录态：${domain} 页面检测到登录墙（证据: ${(probe.signals || []).join(', ')}）。已接管窗口，需要你手动登录。`,
+        };
+      }
+      // 探针判不出来，但人类已经用 mark-login 登记过这个域 —— 那就以人的判断为准。
+      // 措辞要跟真实依据对上：说「证据不足」会让人以为白登记了一次。
+      if (
+        (verifiedDomains ?? []).some(
+          (entry) => SessionRegistry.normalizeHost(entry) === SessionRegistry.normalizeHost(domain)
+        )
+      ) {
+        return {
+          ok: true,
+          authenticated: true,
+          message: `✅ [免登录复用] ${domain} 探针证据不足，但已由你 mark-login 登记为 verified，按显式确认复用登录态。`,
         };
       }
       return {

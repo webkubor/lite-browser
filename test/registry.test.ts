@@ -251,3 +251,31 @@ describe('SessionRegistry & Multi-Agent Identity Isolation', () => {
   });
 });
 
+
+describe('normalizeHost —— 主机名归一', () => {
+  it('完整 URL 归一成裸主机名', () => {
+    expect(SessionRegistry.normalizeHost('http://127.0.0.1:3080/?token=abc')).toBe('127.0.0.1');
+    expect(SessionRegistry.normalizeHost('https://www.juejin.cn/post/1')).toBe('www.juejin.cn');
+  });
+
+  it('裸主机名原样返回（extractDomain 对它会抛异常返回 null）', () => {
+    // 这就是那个 bug：verifiedDomains 存的是裸主机名，拿 extractDomain 去比对必然 null。
+    expect(SessionRegistry.extractDomain('127.0.0.1')).toBeNull();
+    expect(SessionRegistry.normalizeHost('127.0.0.1')).toBe('127.0.0.1');
+  });
+
+  it('带端口的 authority 与完整 URL 归一到同一结果', () => {
+    expect(SessionRegistry.normalizeHost('127.0.0.1:3080')).toBe('127.0.0.1');
+    expect(SessionRegistry.normalizeHost('http://127.0.0.1:3080/')).toBe('127.0.0.1');
+  });
+
+  it('大小写与空白不敏感', () => {
+    expect(SessionRegistry.normalizeHost('  WWW.Juejin.CN  ')).toBe('www.juejin.cn');
+  });
+
+  it('空值归一成空串，不抛异常', () => {
+    expect(SessionRegistry.normalizeHost(undefined)).toBe('');
+    expect(SessionRegistry.normalizeHost(null)).toBe('');
+    expect(SessionRegistry.normalizeHost('')).toBe('');
+  });
+});

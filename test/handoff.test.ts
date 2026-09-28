@@ -22,6 +22,7 @@ import {
   renderHandoffCard,
   renderStatusLine,
 } from '../src/handoff.js';
+import { resolveAuthState } from '../src/status.js';
 import type { AuthProbe, SessionStatus } from '../src/types.js';
 
 // ───────────────────────── 探针执行环境（最小假 DOM） ─────────────────────────
@@ -243,5 +244,66 @@ describe('接管已有 Chromium profile 的语义', () => {
     expect(label('/x/Citro Labs/ego lite', 'Profile 1')).toBe('ego lite/Profile 1');
     expect(label('/x/Citro Labs/ego lite')).toBe('ego lite');
     expect(typeof ChromeManager).toBe('function');
+  });
+});
+
+describe('登录态：探针 unknown 时尊重人类的显式确认', () => {
+  it('探针 unknown + 该域被 mark-login 登记过 → authenticated', () => {
+    // DSH 的真实形状：URL 带 ?token=，cookie 空，无 avatar，探针永远判不出来。
+    expect(
+      resolveAuthState({
+        probeState: 'unknown',
+        probeDomain: '127.0.0.1',
+        sessionUrl: 'http://127.0.0.1:3080/?token=abc',
+        loginDomains: ['127.0.0.1'],
+      })
+    ).toBe('authenticated');
+  });
+
+  it('探针真看到登录墙时，人为标记不许覆盖 —— 仍报 anonymous', () => {
+    expect(
+      resolveAuthState({
+        probeState: 'anonymous',
+        probeDomain: 'example.com',
+        loginDomains: ['example.com'],
+      })
+    ).toBe('anonymous');
+  });
+
+  it('探针已自行判定 authenticated 时原样透传', () => {
+    expect(
+      resolveAuthState({ probeState: 'authenticated', probeDomain: 'x.com', loginDomains: [] })
+    ).toBe('authenticated');
+  });
+
+  it('没被登记的域仍留 unknown —— 「宁可 unknown」的原设计不变', () => {
+    expect(
+      resolveAuthState({ probeState: 'unknown', probeDomain: 'other.com', loginDomains: ['127.0.0.1'] })
+    ).toBe('unknown');
+  });
+
+  it('探针没跑成（undefined）且无登记 → unknown', () => {
+    expect(resolveAuthState({ probeState: undefined, sessionUrl: 'https://a.com/x' })).toBe('unknown');
+  });
+
+  it('探针失败时用 session.url 的主机名兜底比对', () => {
+    expect(
+      resolveAuthState({
+        probeState: 'unknown',
+        probeDomain: null,
+        sessionUrl: 'http://127.0.0.1:3080/?token=abc',
+        loginDomains: ['127.0.0.1'],
+      })
+    ).toBe('authenticated');
+  });
+
+  it('端口不同也算同一个域（登记的是 host，不是 origin）', () => {
+    expect(
+      resolveAuthState({
+        probeState: 'unknown',
+        probeDomain: '127.0.0.1',
+        loginDomains: ['http://127.0.0.1:3080/'],
+      })
+    ).toBe('authenticated');
   });
 });
