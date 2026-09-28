@@ -114,7 +114,7 @@ SOP 智能沉淀、自进化与团队共享:
 Cookie 与 Profile 管理:
   lite-browser cookie export [domain]      导出当前会话的 Cookies [--out <path>]
   lite-browser cookie import <file>        将 Cookie 文件导入当前会话
-  lite-browser cookie pull-system [domain] 从系统 Chrome 安全解密提取并注入 Cookies (免输密码)
+  lite-browser cookie pull-system [domain] [--env [--keys a,b]] 从系统 Chrome 安全解密提取 Cookie；默认注入当前会话，--env 只输出 export 行（无需浏览器，供定时任务消费）
   lite-browser cookie clear                清理当前会话的 Cookies
   lite-browser profile list                列出所有持久化的用户 Profile
 
@@ -1114,9 +1114,27 @@ async function main() {
           console.log(`✅ 成功导入 ${res.count} 条 Cookies`);
         } else if (sub === 'pull-system' || sub === 'pull') {
           const domain = args[2] && !args[2].startsWith('--') ? args[2] : undefined;
-          console.log(`🔐 正在从系统 Chrome 安全解密提取 Cookies${domain ? ` (匹配域名: ${domain})` : ''}...`);
-          const res = await CookieManager.pullFromSystem(domain, target);
-          console.log(`✅ 成功从系统 Chrome 提取并注入 ${res.count} 条 Cookies${target ? ` 至会话 ${target}` : ''}${res.count === 0 && domain ? '（该域在系统 Chrome 里没有可解密 Cookie）' : ''}！`);
+          const envOnly = args.includes('--env');
+          // --env 的 stdout 是给 shell `eval` / 解析用的数据通道，进度文案混进去
+          // 就会污染消费方。走 stderr，人看得到，数据干净。
+          const progress = (msg: string) => (envOnly ? console.error(msg) : console.log(msg));
+          progress(`🔐 正在从系统 Chrome 安全解密提取 Cookies${domain ? ` (匹配域名: ${domain})` : ''}...`);
+          const keyIdx = args.indexOf('--keys');
+          const keys = keyIdx >= 0 && args[keyIdx + 1] ? args[keyIdx + 1].split(',').map((k) => k.trim()).filter(Boolean) : undefined;
+          const res = await CookieManager.pullFromSystem(domain, target, { envOnly, keys });
+          if (envOnly) {
+            // 定时任务消费的就是这段 stdout：只吐 export 行，别混进任何日志/进度文案。
+            if (res.env) process.stdout.write(res.env);
+            const missing = keys?.filter((k) => !res.env?.includes(`export ${k}=`));
+            if (res.count === 0) {
+              console.error(`❗ 系统 Chrome 里没有 ${domain ?? '任何域'} 的可解密 Cookie${domain ? '' : '（可加域名参数限定）'}`);
+            }
+            if (missing?.length) {
+              console.error(`❗ 指定 key 未在系统 Chrome 中找到: ${missing.join(', ')}`);
+            }
+          } else {
+            console.log(`✅ 成功从系统 Chrome 提取并注入 ${res.count} 条 Cookies${target ? ` 至会话 ${target}` : ''}${res.count === 0 && domain ? '（该域在系统 Chrome 里没有可解密 Cookie）' : ''}！`);
+          }
         } else if (sub === 'clear') {
           await CookieManager.clear(target);
           console.log('✅ 已清除当前会话的所有 Cookies');

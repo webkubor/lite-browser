@@ -60,7 +60,11 @@ export class CookieManager {
   /**
    * 从系统日常 Google Chrome 中安全解密并直接注入指定域名（或全量）的 Cookies
    */
-  static async pullFromSystem(domain?: string, target?: string | number): Promise<{ count: number; domain?: string }> {
+  static async pullFromSystem(
+    domain?: string,
+    target?: string | number,
+    opts: { envOnly?: boolean; keys?: string[] } = {},
+  ): Promise<{ count: number; domain?: string; env?: string }> {
     const { execSync } = await import('node:child_process');
     const crypto = await import('node:crypto');
     const { homedir } = await import('node:os');
@@ -141,6 +145,17 @@ export class CookieManager {
           ...(expires !== undefined ? { expires } : {}),
         });
       }
+    }
+
+    // envOnly：只把 cookie 打成 `export NAME='value'` 交给调用方，不碰任何会话。
+    // 定时任务（凌晨/无人值守）没有浏览器窗口，注入模式会直接失败；而解密逻辑
+    // 就在这里，不该为了「没有浏览器」就另写一份 Python 复刻一遍（SSOT）。
+    if (opts.envOnly) {
+      const wanted = opts.keys?.length ? new Set(opts.keys) : undefined;
+      const lines = cdpCookies
+        .filter((c) => !wanted || wanted.has(c.name))
+        .map((c) => `export ${c.name}='${c.value.replace(/'/g, "'\\''")}'`);
+      return { count: cdpCookies.length, domain, env: lines.join('\n') + (lines.length ? '\n' : '') };
     }
 
     if (cdpCookies.length > 0) {
