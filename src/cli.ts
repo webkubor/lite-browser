@@ -115,6 +115,7 @@ Cookie 与 Profile 管理:
   lite-browser cookie export [domain]      导出当前会话的 Cookies [--out <path>]
   lite-browser cookie import <file>        将 Cookie 文件导入当前会话
   lite-browser cookie pull-system [domain] [--env [--keys a,b]] 从系统 Chrome 安全解密提取 Cookie；默认注入当前会话，--env 只输出 export 行（无需浏览器，供定时任务消费）
+      [--chrome-profile <名>]              从系统 Chrome 的哪个 profile 读（默认 Default；如 "Profile 1"）
   lite-browser cookie clear                清理当前会话的 Cookies
   lite-browser profile list                列出所有持久化的用户 Profile
 
@@ -1121,7 +1122,9 @@ async function main() {
           progress(`🔐 正在从系统 Chrome 安全解密提取 Cookies${domain ? ` (匹配域名: ${domain})` : ''}...`);
           const keyIdx = args.indexOf('--keys');
           const keys = keyIdx >= 0 && args[keyIdx + 1] ? args[keyIdx + 1].split(',').map((k) => k.trim()).filter(Boolean) : undefined;
-          const res = await CookieManager.pullFromSystem(domain, target, { envOnly, keys });
+          const cpIdx = args.indexOf('--chrome-profile');
+          const chromeProfile = cpIdx >= 0 && args[cpIdx + 1] ? args[cpIdx + 1] : undefined;
+          const res = await CookieManager.pullFromSystem(domain, target, { envOnly, keys, chromeProfile });
           if (envOnly) {
             // 定时任务消费的就是这段 stdout：只吐 export 行，别混进任何日志/进度文案。
             if (res.env) process.stdout.write(res.env);

@@ -63,7 +63,7 @@ export class CookieManager {
   static async pullFromSystem(
     domain?: string,
     target?: string | number,
-    opts: { envOnly?: boolean; keys?: string[] } = {},
+    opts: { envOnly?: boolean; keys?: string[]; chromeProfile?: string } = {},
   ): Promise<{ count: number; domain?: string; env?: string }> {
     const { execSync } = await import('node:child_process');
     const crypto = await import('node:crypto');
@@ -71,7 +71,14 @@ export class CookieManager {
     const { join } = await import('node:path');
     const { unlinkSync } = await import('node:fs');
 
-    const chromeCookiePath = join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome', 'Default', 'Cookies');
+    // 系统 Chrome 有多个 profile（Default / Profile 1 / …），不同 profile 登录的是不同账号——
+    // 小红书一颗猫球在 Profile 1、山鬼映画在 Default（2026-09-29）。原来写死 Default，别的号导不进来。
+    // 只收 Chrome 自己的目录命名，防止被传成任意路径。
+    const chromeProfile = opts.chromeProfile || 'Default';
+    if (!/^(Default|Profile \d+)$/.test(chromeProfile)) {
+      throw new Error(`--chrome-profile 只接受 "Default" 或 "Profile N"，收到: ${chromeProfile}`);
+    }
+    const chromeCookiePath = join(homedir(), 'Library', 'Application Support', 'Google', 'Chrome', chromeProfile, 'Cookies');
     if (!existsSync(chromeCookiePath)) {
       throw new Error(`未找到系统 Chrome Cookies 文件: ${chromeCookiePath}`);
     }
