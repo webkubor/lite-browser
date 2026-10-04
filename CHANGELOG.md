@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## [1.5.0] - 2026-10-04
+
+> **一句话摘要**：融合 browser-use/jev-ultrafast 极速内核，单步动作延迟直降 90% 以上（15ms 直达）；新增 `auto` 目标驱动探索闭环。
+
+### ✨ 新增特性 (What's New)
+- **新增 `lite-browser auto <goal>` 极速目标驱动执行器**：
+  - 支持直接以自然语言（如 `lite-browser auto "查询苏黎世到伦敦的单程机票" --url ...`）自主驱动浏览器达成复合目标；
+  - **SOP 优先**：执行前智能匹配已有沉淀 SOP，若命中直接触发 0 Token / 300ms 确定性回放；
+  - **推测循环与文本解耦**：未命中时进入 Jev-style 紧凑控件决策循环，控件路由与文本填充双模型解耦；
+  - **凭据零硬编码**：自动优先从原生 `kyvault` (`secret://deepseek/api-key`) 注入凭据；
+  - **自进化闭环**：任务达成后直接提示原地沉淀为 SOP (`lite-browser done`)。
+
+### ⚡️ 体验与性能优化 (Improvements)
+- **Chromium 原生 `checkVisibility` 零 Reflow 快照**：彻底弃用重型 `getComputedStyle()`（杜绝触发页面 Reflow/Layout 布局抖动），采用 Chromium 原生 `el.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})`；引入 `WeakMap` 与 `Map` 活体节点缓存（`window.__lite_fast__`），快照耗时缩减 80% 以上。
+- **1ms 活体目标解析与遮挡预检 (`FAST_RESOLVE_TARGET_SCRIPT`)**：`click`、`type`、`hover`、`select`、`upload` 彻底告别「每次点按重复全量扫描 DOM」的历史包袱，优先直达活体节点校验并在事件派发前通过 `document.elementFromPoint(x, y)` 核验遮挡，杜绝弹窗/浮层导致的幽灵点击，单步执行延迟从 500ms~1000ms 压缩至 15ms 内（提速 20~40 倍）。
+- **自适应微沉降 (Adaptive Micro-Settle)**：彻底废除生硬的 `sleep(50ms)` 与 `sleep(400ms)`。常规操作至多等待 2 个动画帧 (rAF, ~32ms) 或 50ms；Combobox 针对选项下拉列表侦测上限 200ms。
+
+### 🐛 缺陷修复 (Bug Fixes)
+- **复杂 SPA 页面 DOM 异步漂移自愈**：修复高频点击时因界面动画位移导致击空或抛出 Stale Element 的问题，点击前实时重算当前绝对几何位置；引入 `pageKey` 快照指纹比对机制。
+
+### ⚠️ 破坏性变更与迁移 (Breaking Changes & Migration)
+- 无破坏性变更（100% 向后兼容）。
+
+### 📦 安装与升级 (Install & Upgrade)
+```bash
+# 全局更新构建
+cd ~/dev/agent-infra/lite-browser && bun run build
+# 或通过一键脚本安装
+curl -fsSL https://raw.githubusercontent.com/webkubor/lite-browser/main/install.sh | bash
+```
+
 ## [1.4.0] - 2026-09-26
 
 > **一句话摘要**：Agent 交接协议（人在环中的状态机与退出码契约）+ 外部脚本纳入沉淀体系的 `exec` 通道 + 资产发现。

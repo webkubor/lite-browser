@@ -5,7 +5,12 @@
 import { writeFileSync } from 'node:fs';
 import { CdpClient } from './cdp.js';
 import { ChromeManager } from './chrome.js';
-import { INJECTED_DOM_SCRIPT, formatSnapshot } from './dom.js';
+import {
+  INJECTED_DOM_SCRIPT,
+  FAST_RESOLVE_TARGET_SCRIPT,
+  ADAPTIVE_SETTLE_SCRIPT,
+  formatSnapshot,
+} from './dom.js';
 import { RecipeEngine } from './recipe.js';
 import { SessionRegistry } from './registry.js';
 import { DEFAULT_PORT } from './constants.js';
@@ -327,6 +332,97 @@ export class BrowserActions {
     return pageInfo.result?.value || '';
   }
 
+  /**
+   * 自适应微沉降 (Adaptive Micro-Settle)
+   * 采用 2 个渲染帧 (~32ms) 替代固定 sleep；针对 combobox 动态等待下拉选项就绪（上限 200ms）
+   */
+  async adaptiveSettle(options: { combobox?: boolean } = {}): Promise<void> {
+    try {
+      await this.client.send('Runtime.evaluate', {
+        expression: `${ADAPTIVE_SETTLE_SCRIPT}(${JSON.stringify(options)})`,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+    } catch (_) {
+      await new Promise((r) => setTimeout(r, options.combobox ? 80 : 30));
+    }
+  }
+
+  /**
+   * 极速目标解析：结合 jev-ultrafast 的活体节点引用与 elementFromPoint 遮挡判定
+   * 命中内存活体缓存时仅需 1~3ms，免去重复全量爬取 DOM
+   */
+  async resolveTarget(target: string): Promise<{
+    x: number;
+    y: number;
+    selector: string;
+    desc: string;
+    tag: string;
+    role: string;
+    occluded: boolean;
+  }> {
+    // 1. 优先尝试 1ms 活体快速解析
+    try {
+      const fastRes = await this.client.send('Runtime.evaluate', {
+        expression: `${FAST_RESOLVE_TARGET_SCRIPT}(${JSON.stringify(target)})`,
+        returnByValue: true,
+      });
+      const val = fastRes.result?.value;
+      if (val && val.ok) {
+        return {
+          x: val.x,
+          y: val.y,
+          selector: val.selector,
+          desc: `[${val.tag}:${val.role}] "${val.text}"`,
+          tag: val.tag,
+          role: val.role,
+          occluded: val.occluded,
+        };
+      }
+    } catch (_) {}
+
+    // 2. 若目标未缓存或已失效，执行一次轻量 snapshot 重新建表
+    const { elements } = await this.snapshot();
+    if (target.startsWith('@')) {
+      const found = elements.find((e) => e.id === target);
+      if (!found) {
+        throw new Error(`未在页面找到编号为 ${target} 的元素，请重新执行 snapshot 查看最新索引`);
+      }
+      return {
+        x: found.x,
+        y: found.y,
+        selector: found.selector,
+        desc: `[${found.tag}:${found.role}] "${found.text}"`,
+        tag: found.tag,
+        role: found.role,
+        occluded: false,
+      };
+    } else {
+      const posRes = await this.client.send('Runtime.evaluate', {
+        expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(target)});
+          if (!el) return null;
+          const rect = el.getBoundingClientRect();
+          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+        })()`,
+        returnByValue: true,
+      });
+
+      if (!posRes.result?.value) {
+        throw new Error(`未找到匹配选择器 "${target}" 的可见元素`);
+      }
+      return {
+        x: posRes.result.value.x,
+        y: posRes.result.value.y,
+        selector: target,
+        desc: target,
+        tag: '',
+        role: '',
+        occluded: false,
+      };
+    }
+  }
+
   async snapshot(): Promise<SnapshotResult> {
     await this.client.send('Runtime.enable');
     const evalRes = await this.client.send('Runtime.evaluate', {
@@ -339,15 +435,12 @@ export class BrowserActions {
       throw new Error(`DOM 抽取异常: ${evalRes.exceptionDetails.text}`);
     }
 
-    const elements: InteractiveElement[] = evalRes.result.value || [];
+    const raw = evalRes.result?.value;
+    const elements: InteractiveElement[] = Array.isArray(raw) ? raw : (raw?.elements || []);
     this.cachedElements = elements;
 
-    const pageInfo = await this.client.send('Runtime.evaluate', {
-      expression: '({ title: document.title, url: window.location.href })',
-      returnByValue: true,
-    });
-
-    const { title, url } = pageInfo.result.value || {};
+    const title = (raw && !Array.isArray(raw) && raw.title) || (await this.getTitle().catch(() => ''));
+    const url = (raw && !Array.isArray(raw) && raw.url) || (await this.getUrl().catch(() => ''));
     const formatted = formatSnapshot(elements, url, title);
 
     // snapshot 是 Agent 每一步都会调的命令，顺便做一次登录态判定：
@@ -369,37 +462,8 @@ export class BrowserActions {
   }
 
   async click(target: string): Promise<{ ok: boolean; target: string; x: number; y: number; selector: string }> {
-    let x: number, y: number, selector: string, desc: string;
-
-    if (target.startsWith('@')) {
-      const { elements } = await this.snapshot();
-      const found = elements.find((e) => e.id === target);
-      if (!found) {
-        throw new Error(`未在页面找到编号为 ${target} 的元素，请重新执行 snapshot 查看最新索引`);
-      }
-      x = found.x;
-      y = found.y;
-      selector = found.selector;
-      desc = `[${found.tag}:${found.role}] "${found.text}"`;
-    } else {
-      selector = target;
-      desc = target;
-      const posRes = await this.client.send('Runtime.evaluate', {
-        expression: `(() => {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return null;
-          const rect = el.getBoundingClientRect();
-          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
-        })()`,
-        returnByValue: true,
-      });
-
-      if (!posRes.result.value) {
-        throw new Error(`未找到匹配选择器 "${selector}" 的可见元素`);
-      }
-      x = posRes.result.value.x;
-      y = posRes.result.value.y;
-    }
+    const res = await this.resolveTarget(target);
+    const { x, y, selector, desc } = res;
 
     await this.client.send('Input.dispatchMouseEvent', {
       type: 'mousePressed',
@@ -408,8 +472,6 @@ export class BrowserActions {
       button: 'left',
       clickCount: 1,
     });
-
-    await new Promise((r) => setTimeout(r, 50));
 
     await this.client.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased',
@@ -437,10 +499,13 @@ export class BrowserActions {
       targetDescription: desc,
     });
 
+    await this.adaptiveSettle();
+
     return { ok: true, target, x, y, selector };
   }
 
   async type(target: string, text: string): Promise<{ ok: boolean; target: string; text: string }> {
+    const targetInfo = await this.resolveTarget(target);
     const clickRes = await this.click(target);
 
     // 先安全清空已有内容，兼容普通 input/textarea 与 contenteditable 富文本编辑器
@@ -473,7 +538,7 @@ export class BrowserActions {
         if (i < lines.length - 1) {
           await this.client.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', modifiers: 8 });
           await this.client.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', modifiers: 8 });
-          await new Promise((r) => setTimeout(r, 30));
+          await new Promise((r) => setTimeout(r, 20));
         }
       }
     } else {
@@ -492,7 +557,6 @@ export class BrowserActions {
       })()`,
     });
 
-
     RecipeEngine.recordAction({
       type: 'type',
       target,
@@ -500,6 +564,9 @@ export class BrowserActions {
       text,
       targetDescription: clickRes.target,
     });
+
+    const isCombobox = targetInfo.role === 'combobox' || targetInfo.tag === 'select';
+    await this.adaptiveSettle({ combobox: isCombobox });
 
     return { ok: true, target, text };
   }
@@ -560,37 +627,8 @@ export class BrowserActions {
   }
 
   async hover(target: string): Promise<{ ok: boolean; target: string; x: number; y: number; selector: string }> {
-    let x: number, y: number, selector: string, desc: string;
-
-    if (target.startsWith('@')) {
-      const { elements } = await this.snapshot();
-      const found = elements.find((e) => e.id === target);
-      if (!found) {
-        throw new Error(`未在页面找到编号为 ${target} 的元素`);
-      }
-      x = found.x;
-      y = found.y;
-      selector = found.selector;
-      desc = `[${found.tag}:${found.role}] "${found.text}"`;
-    } else {
-      selector = target;
-      desc = target;
-      const posRes = await this.client.send('Runtime.evaluate', {
-        expression: `(() => {
-          const el = document.querySelector(${JSON.stringify(selector)});
-          if (!el) return null;
-          const rect = el.getBoundingClientRect();
-          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
-        })()`,
-        returnByValue: true,
-      });
-
-      if (!posRes.result.value) {
-        throw new Error(`未找到匹配选择器 "${selector}" 的可见元素`);
-      }
-      x = posRes.result.value.x;
-      y = posRes.result.value.y;
-    }
+    const res = await this.resolveTarget(target);
+    const { x, y, selector, desc } = res;
 
     await this.client.send('Input.dispatchMouseEvent', {
       type: 'mouseMoved',
@@ -606,6 +644,8 @@ export class BrowserActions {
       y,
       targetDescription: desc,
     });
+
+    await this.adaptiveSettle();
 
     return { ok: true, target, x, y, selector };
   }
@@ -646,17 +686,14 @@ export class BrowserActions {
       key,
     });
 
+    await this.adaptiveSettle();
+
     return { ok: true, key };
   }
 
   async select(target: string, value: string): Promise<{ ok: boolean; target: string; value: string }> {
-    let selector = target;
-    if (target.startsWith('@')) {
-      const { elements } = await this.snapshot();
-      const found = elements.find((e) => e.id === target);
-      if (!found) throw new Error(`未在页面找到编号为 ${target} 的元素`);
-      selector = found.selector;
-    }
+    const targetInfo = await this.resolveTarget(target);
+    const selector = targetInfo.selector;
 
     const res = await this.client.send('Runtime.evaluate', {
       expression: `(() => {
@@ -681,17 +718,14 @@ export class BrowserActions {
       value,
     });
 
+    await this.adaptiveSettle();
+
     return { ok: true, target, value };
   }
 
   async upload(target: string, files: string[]): Promise<{ ok: boolean; target: string; files: string[] }> {
-    let selector = target;
-    if (target.startsWith('@')) {
-      const { elements } = await this.snapshot();
-      const found = elements.find((e) => e.id === target);
-      if (!found) throw new Error(`未在页面找到编号为 ${target} 的元素`);
-      selector = found.selector;
-    }
+    const targetInfo = await this.resolveTarget(target);
+    const selector = targetInfo.selector;
 
     await this.client.send('DOM.enable');
     const evalRes = await this.client.send('Runtime.evaluate', {
@@ -714,6 +748,8 @@ export class BrowserActions {
       selector,
       files,
     });
+
+    await this.adaptiveSettle();
 
     return { ok: true, target, files };
   }

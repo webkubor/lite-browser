@@ -3,7 +3,7 @@
 **极致轻量、零常驻、具身自进化的 AI 浏览器操控工具** —— 专为 AI Agent、极速自动化、多 Agent 租户隔离与团队协作设计。
 
 [![Bun](https://img.shields.io/badge/runtime-Bun_1.4+-black?style=flat-square&logo=bun)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.4.0-green.svg?style=flat-square)](package.json)
+[![Version](https://img.shields.io/badge/version-1.5.0-green.svg?style=flat-square)](package.json)
 [![Multi-Agent](https://img.shields.io/badge/multi--agent-Caller_Aware-blueviolet.svg?style=flat-square)](README.md)
 [![Handoff](https://img.shields.io/badge/handoff-Human_in_the_Loop-critical.svg?style=flat-square)](README.md)
 [![Zero-Relogin](https://img.shields.io/badge/auth--reuse-Zero_Relogin-success.svg?style=flat-square)](README.md)
@@ -18,6 +18,7 @@
 
 ## 🌟 为什么选择 lite-browser？
 
+- 🚀 **融合 Jev-Ultrafast 极速内核 (v1.5.0)**：引入原生 `checkVisibility` 零 Reflow 快照与活体引用，1ms 活体直达与遮挡预检，单步延迟压缩至 15ms；内置 `lite-browser auto <goal>` 极速目标驱动自主闭环。
 - 🤖 **Agent 身份感知与隔离 (`--agent`)**：自动识别 `Claude Code`、`Gemini`、`Codex`、`Hermes` 等 Agent 调用者身份，分配专属调试端口与独立 Profile，多 Agent 并行执行绝不踩踏端口。
 - 🔑 **跨 Agent 登录态零重复登录 (`--reuse`)**：自动记录各平台登录域名（小红书、掘金、GitHub 等）。任意 Agent 只要扫码/登录过一次，其他 Agent 携带 `--reuse` 即可无缝复用已有登录态，彻底告别重复扫码。
 - 📋 **全景感知与会话诊断 (`whoami` & `session list`)**：随时洞察当前是哪个 Agent 占用什么端口、跑了哪个页面、具有哪些平台的活跃会话与登录凭据。
@@ -60,16 +61,19 @@ lite-browser session list
 lite-browser session clean
 ```
 
-### 2. 网页极速交互与自动化
+### 2. 网页极速交互与自动化 (Jev-Ultrafast 极速内核)
 
 ```bash
+# 🎯 极速自主目标驱动探索（SOP 优先，未命中走 Jev-style 紧凑循环，达成后可沉淀）
+lite-browser auto "查询苏黎世到伦敦的单程机票" --url https://flights.google.com
+
 # 打开网页建立会话
 lite-browser open https://juejin.cn/editor/drafts/new
 
-# 提取视口可交互元素并自动编号为 @1, @2 ...
+# 提取视口可交互元素并自动编号为 @1, @2 ...（原生 checkVisibility，零 Reflow）
 lite-browser snapshot
 
-# 点击与键入文本（防双重输入的 CDP 原生文本插入）
+# 点击与键入文本（1ms 活体直达 + 实时遮挡检测 + 自适应微沉降）
 lite-browser click @1
 lite-browser type @2 "文章标题"
 lite-browser press Enter

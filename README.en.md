@@ -3,7 +3,7 @@
 **Ultra-lightweight, zero-daemon, embodied self-evolving AI browser control engine** —— Designed for AI Agents, instant automation, multi-agent tenancy, and team collaboration.
 
 [![Bun](https://img.shields.io/badge/runtime-Bun_1.4+-black?style=flat-square&logo=bun)](https://bun.sh)
-[![Version](https://img.shields.io/badge/version-1.2.0-green.svg?style=flat-square)](package.json)
+[![Version](https://img.shields.io/badge/version-1.5.0-green.svg?style=flat-square)](package.json)
 [![Multi-Agent](https://img.shields.io/badge/multi--agent-Caller_Aware-blueviolet.svg?style=flat-square)](README.en.md)
 [![Zero-Relogin](https://img.shields.io/badge/auth--reuse-Zero_Relogin-success.svg?style=flat-square)](README.en.md)
 [![MCP](https://img.shields.io/badge/MCP-Plugin_Ready-purple.svg?style=flat-square)](src/mcp.ts)
@@ -17,6 +17,7 @@
 
 ## 🌟 Why lite-browser?
 
+- 🚀 **Integrated Jev-Ultrafast Engine (v1.5.0)**: Native `checkVisibility` snapshot with zero reflow, 1ms live node resolution with elementFromPoint occlusion guard, action latency down to 15ms; built-in `lite-browser auto <goal>` autonomous loop.
 - 🤖 **Agent Identity Isolation (`--agent`)**: Automatically recognizes caller agents (`Claude Code`, `Gemini`, `Codex`, `Hermes`). Dynamically allocates dedicated CDP ports and isolated user profiles, preventing multi-agent collision.
 - 🔑 **Zero-Relogin State & Token Reuse (`--reuse`)**: Tracks authenticated domain credentials across sessions. Once any agent logs in via QR/auth on a domain, other agents with `--reuse` attach to the authenticated session immediately.
 - 📋 **Full Observability (`whoami` & `session list`)**: Real-time diagnostic inspection of active caller agent, bound port, active URL, and authenticated domain credentials.

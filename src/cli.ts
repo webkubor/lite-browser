@@ -16,6 +16,7 @@ import { SessionRegistry } from './registry.js';
 import { buildSessionStatus } from './status.js';
 import { executeSteps, needsBrowser, runExecStep } from './runner.js';
 import { discoverAssets } from './discover.js';
+import { AutoPilot } from './auto.js';
 import {
   EXIT_AWAITING_HUMAN,
   EXIT_AWAIT_TIMEOUT,
@@ -28,7 +29,7 @@ import {
   renderStatusLine,
 } from './handoff.js';
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 
 const USAGE = `
 🚀 lite-browser —— 极致轻量、零常驻、具身自进化的自研浏览器操控工具 (v${VERSION})
@@ -44,7 +45,10 @@ const USAGE = `
   退出码契约: 0=正常  1=执行错误  2=参数错误  3=需要人类介入  4=等待人类超时
   相位 (phase): idle | navigating | acting | awaiting_human | blocked | completed
 
-基础操作:
+基础操作 (Jev-Ultrafast 极速内核):
+  lite-browser auto "<goal>" [flags]       结合 jev-ultrafast 极速自主探索并达成目标
+      [--url <url>]                        初始网页 URL
+      [--max-steps <N>]                    最大探索步数 (默认 15)
   lite-browser open <url> [flags]          打开网页建立会话 (默认有头，支持持久化 profile)
       [--headless]                         使用无头模式
       [--profile <name>]                   指定持久化 profile 标识 (默认 "default")
@@ -372,6 +376,43 @@ async function main() {
         console.log(`✅ 已恢复执行：${probe.domain || '目标站点'} 登录态确认为 ${authStateLabel(probe.state)}${probe.domain ? `，已登记 ${probe.domain} 为 verified` : ''}。`);
         console.log(`   当前相位: acting`);
         process.exit(EXIT_OK);
+      }
+
+      case 'auto': {
+        const goal = args[1];
+        if (!goal) {
+          console.error('❌ 请提供自主探索目标。例如: lite-browser auto "查询苏黎世到伦敦的单程机票"');
+          process.exit(1);
+        }
+
+        const urlIdx = args.indexOf('--url');
+        const targetUrl = urlIdx >= 0 ? args[urlIdx + 1] : undefined;
+        const stepsIdx = args.indexOf('--max-steps');
+        const maxSteps = stepsIdx >= 0 ? parseInt(args[stepsIdx + 1], 10) : 15;
+
+        let browser: BrowserActions;
+        if (targetUrl) {
+          browser = await BrowserActions.launchOrConnect({
+            url: targetUrl,
+            agent: explicitAgent,
+            port: explicitPort,
+            reuse,
+          });
+        } else {
+          browser = await getSessionClient();
+        }
+
+        const pilot = new AutoPilot(browser, { maxSteps });
+        const res = await pilot.run(goal);
+        if (res.ok) {
+          if (!res.sopMatched) {
+            console.log(`\n💡 提示：该任务已完成，若需日常自动执行，可原地沉淀为 SOP：`);
+            console.log(`   lite-browser done --name "<sop-名称>" --desc "${goal}" --intent "${goal}"`);
+          }
+        } else {
+          process.exit(1);
+        }
+        break;
       }
 
       case 'open': {
