@@ -18,6 +18,7 @@ import { executeSteps, needsBrowser, runExecStep } from './runner.js';
 import { discoverAssets } from './discover.js';
 import { parseFingerprintFlags } from './fingerprint.js';
 import { CHROME_USER_DATA_DIR, findProfileByAccount, listChromeProfiles, maskEmail } from './profiles.js';
+import { claimProfile, listClaims, releaseProfile, returnProfile, takeoverProfile } from './claims.js';
 import { AutoPilot } from './auto.js';
 import {
   EXIT_AWAITING_HUMAN,
@@ -196,6 +197,44 @@ async function main() {
 
   try {
     switch (command) {
+      case 'claim':
+      case 'release':
+      case 'takeover':
+      case 'return': {
+        // 认领键：--account 解析成 chrome:<目录>，否则取第二个参数（如 chrome:Profile 5 / profile:work）。
+        const key = explicitAccount ? `chrome:${findProfileByAccount(explicitAccount).dir}` : args[1];
+        if (!key) {
+          console.error(`❌ 请指定认领键或 --account。例如: lite-browser ${command} --account vex`);
+          process.exit(2);
+        }
+        const agent = SessionRegistry.detectCurrentAgent(explicitAgent);
+        if (command === 'claim') {
+          const c = claimProfile(key, agent, explicitAccount);
+          console.log(`✅ 已认领 ${key} → agent「${c.owner}」（controller=${c.controller}）`);
+        } else if (command === 'release') {
+          const ok = releaseProfile(key, agent, args.includes('--force'));
+          console.log(ok ? `✅ 已释放 ${key}` : `ℹ️ ${key} 当前没有认领`);
+        } else if (command === 'takeover') {
+          const c = takeoverProfile(key);
+          console.log(`🙋 你已接管 ${key}（agent「${c.owner}」暂停操作）。交还请执行: lite-browser return ${key}`);
+        } else {
+          const c = returnProfile(key);
+          console.log(`✅ 已交还 ${key} 给 agent「${c.owner}」`);
+        }
+        break;
+      }
+      case 'claims': {
+        const list = listClaims();
+        if (list.length === 0) {
+          console.log('当前没有任何认领。');
+          break;
+        }
+        console.log('认领键                 持有者          controller  心跳时间');
+        for (const c of list) {
+          console.log(`  ${c.key.padEnd(20)} ${c.owner.padEnd(15)} ${c.controller.padEnd(11)} ${c.heartbeatAt}${c.stale ? '  (已过期，可抢占)' : ''}`);
+        }
+        break;
+      }
       case 'profiles': {
         const list = listChromeProfiles();
         if (list.length === 0) {
@@ -479,6 +518,7 @@ async function main() {
           url,
           headless,
           fingerprint,
+          claimKey: explicitAccount ? `chrome:${findProfileByAccount(explicitAccount).dir}` : undefined,
           profile,
           profileDirectory: explicitProfileDirectory,
           userDataDir: explicitUserDataDir,

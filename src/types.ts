@@ -105,6 +105,8 @@ export interface SessionStatus {
 export interface AgentSessionRecord {
   agent: string;
   port: number;
+  /** 会话绑定的认领键（如 chrome:Profile 5）；每次连接都会校验认领并刷新心跳。 */
+  claimKey?: string;
   /** 会话使用的指纹（时区/语言/UA/视口/核数/内存）；每次连接都会重新应用。 */
   fingerprint?: import('./fingerprint').FingerprintProfile;
   pid?: number;
@@ -140,6 +142,8 @@ export interface SessionState extends AgentSessionRecord {}
 
 export interface LaunchOptions {
   headless?: boolean;
+  /** 认领键；传入时会在启动前认领该 profile。 */
+  claimKey?: string;
   /** 指纹覆盖；不传则保持 Chrome 默认值。 */
   fingerprint?: import('./fingerprint').FingerprintProfile;
   url?: string;

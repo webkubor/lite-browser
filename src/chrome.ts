@@ -284,6 +284,7 @@ export class ChromeManager {
               lastSeen: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             };
+            if (options.claimKey) reusedSession.claimKey = options.claimKey;
             if (reusedSession.verifiedDomains?.length) {
               this.registry.save(reusedSession);
             } else {
@@ -407,6 +408,7 @@ export class ChromeManager {
     };
 
     if (options.fingerprint) session.fingerprint = options.fingerprint;
+    if (options.claimKey) session.claimKey = options.claimKey;
 
     ChromeManager.writeSessionFile(session);
     this.registry.save(session);

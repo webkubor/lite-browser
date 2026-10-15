@@ -15,6 +15,7 @@ import { RecipeEngine } from './recipe.js';
 import { SessionRegistry } from './registry.js';
 import { DEFAULT_PORT } from './constants.js';
 import { applyFingerprint } from './fingerprint.js';
+import { assertCanAct, claimProfile } from './claims.js';
 import {
   AUTH_PROBE_SCRIPT,
   buildHandoff,
@@ -35,6 +36,8 @@ export class BrowserActions {
   }
 
   static async launchOrConnect(options: LaunchOptions & { temp?: boolean } = {}): Promise<BrowserActions> {
+    // 认领先于启动：profile 已被别的 agent 持有时，连 Chrome 都不去拉起。
+    if (options.claimKey) claimProfile(options.claimKey, SessionRegistry.detectCurrentAgent(options.agent));
     const mgr = new ChromeManager(options.port || DEFAULT_PORT);
     const session = await mgr.getOrLaunch(options);
     const client = new CdpClient(session.wsUrl);
@@ -65,6 +68,7 @@ export class BrowserActions {
 
   static async connectToSession(agentOrPort?: string | number): Promise<BrowserActions> {
     const session = ChromeManager.getActiveSession(agentOrPort);
+    if (session?.claimKey) assertCanAct(session.claimKey, session.agent);
     if (!session || !session.wsUrl) {
       const registry = new SessionRegistry();
       const actives = registry.getAll().filter((r) => r.status === 'active');
