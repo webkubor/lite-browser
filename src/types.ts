@@ -105,6 +105,8 @@ export interface SessionStatus {
 export interface AgentSessionRecord {
   agent: string;
   port: number;
+  /** 会话使用的指纹（时区/语言/UA/视口/核数/内存）；每次连接都会重新应用。 */
+  fingerprint?: import('./fingerprint').FingerprintProfile;
   pid?: number;
   profile: string;
   url: string;
@@ -138,6 +140,8 @@ export interface SessionState extends AgentSessionRecord {}
 
 export interface LaunchOptions {
   headless?: boolean;
+  /** 指纹覆盖；不传则保持 Chrome 默认值。 */
+  fingerprint?: import('./fingerprint').FingerprintProfile;
   url?: string;
   /**
    * 接管一个**已存在**的 Chromium user-data-dir，而不是用 lite-browser 自己的。

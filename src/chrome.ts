@@ -11,6 +11,7 @@ import type { SessionState, LaunchOptions, AgentSessionRecord, HandoffState, Ses
 import { SessionRegistry } from './registry.js';
 import { CdpClient } from './cdp.js';
 import { AUTH_PROBE_SCRIPT } from './handoff.js';
+import { fingerprintLaunchArgs } from './fingerprint.js';
 import { DEFAULT_PORT } from './constants.js';
 
 export const PROFILES_DIR = join(STATE_ROOT, 'profiles');
@@ -347,6 +348,10 @@ export class ChromeManager {
         args.push('--headless=new', '--disable-gpu');
       }
 
+      // 指纹的进程级部分：语言、UA、窗口大小，以及 TZ 环境变量（让新进程的 ICU 时区一致）。
+      const launchFp = options.fingerprint ? fingerprintLaunchArgs(options.fingerprint) : undefined;
+      if (launchFp) args.push(...launchFp.args);
+
       args.push(`--user-data-dir=${effectiveUserDataDir}`);
       // Chromium 只在 user-data-dir 已有多个 profile 时才认这个参数；
       // 接管 ego lite 那类多账号目录时，它就是「选哪个号」的开关。
@@ -356,6 +361,7 @@ export class ChromeManager {
       const proc = spawn(chromePath, args, {
         detached: true,
         stdio: 'ignore',
+        env: { ...process.env, ...(launchFp?.env ?? {}) },
       });
       spawnedPid = proc.pid;
       proc.unref();
@@ -399,6 +405,8 @@ export class ChromeManager {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
+    if (options.fingerprint) session.fingerprint = options.fingerprint;
 
     ChromeManager.writeSessionFile(session);
     this.registry.save(session);

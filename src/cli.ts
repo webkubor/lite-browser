@@ -16,6 +16,8 @@ import { SessionRegistry } from './registry.js';
 import { buildSessionStatus } from './status.js';
 import { executeSteps, needsBrowser, runExecStep } from './runner.js';
 import { discoverAssets } from './discover.js';
+import { parseFingerprintFlags } from './fingerprint.js';
+import { CHROME_USER_DATA_DIR, findProfileByAccount, listChromeProfiles, maskEmail } from './profiles.js';
 import { AutoPilot } from './auto.js';
 import {
   EXIT_AWAITING_HUMAN,
@@ -152,6 +154,7 @@ async function main() {
   let explicitPort: number | undefined;
   let explicitUserDataDir: string | undefined;
   let explicitProfileDirectory: string | undefined;
+  let explicitAccount: string | undefined;
   let reuse = false;
 
   const args: string[] = [];
@@ -164,6 +167,8 @@ async function main() {
       explicitUserDataDir = rawArgs[++i];
     } else if (rawArgs[i] === '--profile-directory' && rawArgs[i + 1]) {
       explicitProfileDirectory = rawArgs[++i];
+    } else if (rawArgs[i] === '--account' && rawArgs[i + 1]) {
+      explicitAccount = rawArgs[++i];
     } else if (rawArgs[i] === '--reuse') {
       reuse = true;
     } else {
@@ -191,6 +196,18 @@ async function main() {
 
   try {
     switch (command) {
+      case 'profiles': {
+        const list = listChromeProfiles();
+        if (list.length === 0) {
+          console.log(`未找到 Chrome 的 profile（${CHROME_USER_DATA_DIR}）`);
+          break;
+        }
+        console.log('Chrome profile → 账号身份（用 --account <邮箱|名字> 选择）');
+        for (const p of list) {
+          console.log(`  ${p.dir.padEnd(10)} ${(p.displayName || '-').padEnd(14)} ${(p.gaiaName || '-').padEnd(14)} ${maskEmail(p.email) || '未登录'}`);
+        }
+        break;
+      }
       /**
        * exec —— 让自研脚本的调用进入轨迹。
        *
@@ -417,6 +434,13 @@ async function main() {
 
       case 'open': {
         const url = args[1];
+        // --account 把账号身份解析成 Chrome 的 profile 目录，后面的接管逻辑照常走。
+        if (explicitAccount) {
+          const hit = findProfileByAccount(explicitAccount);
+          explicitUserDataDir = CHROME_USER_DATA_DIR;
+          explicitProfileDirectory = hit.dir;
+          console.log(`👤 账号 ${explicitAccount} → ${hit.dir}（${hit.displayName || hit.gaiaName} / ${maskEmail(hit.email)}）`);
+        }
         if (!url) {
           console.error('❌ 请提供目标 URL。例如: lite-browser open https://github.com');
           process.exit(1);
@@ -438,10 +462,23 @@ async function main() {
           ? '临时'
           : (profile ?? adoptedLabel ?? (agent !== 'default' ? `agent-${agent}` : 'default'));
 
+        const fingerprint = parseFingerprintFlags(args);
         console.log(`🌐 正在打开 ${url} (模式: ${headless ? '无头' : '有头'}, Profile: ${effectiveProfile}, Agent: ${agent}${reuse ? ', 智能复用: 是' : ''})...`);
+        if (fingerprint) {
+          const parts = [
+            fingerprint.seed !== undefined ? `seed=${fingerprint.seed}` : '',
+            fingerprint.timezone ? `tz=${fingerprint.timezone}` : '',
+            fingerprint.locale ? `locale=${fingerprint.locale}` : '',
+            fingerprint.width ? `viewport=${fingerprint.width}x${fingerprint.height}@${fingerprint.deviceScaleFactor ?? 1}x` : '',
+            fingerprint.hardwareConcurrency ? `cores=${fingerprint.hardwareConcurrency}` : '',
+            fingerprint.deviceMemory ? `memory=${fingerprint.deviceMemory}GB` : '',
+          ].filter(Boolean);
+          console.log(`🎭 指纹: ${parts.join(' ')}`);
+        }
         const browser = await BrowserActions.launchOrConnect({
           url,
           headless,
+          fingerprint,
           profile,
           profileDirectory: explicitProfileDirectory,
           userDataDir: explicitUserDataDir,

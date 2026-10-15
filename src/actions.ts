@@ -14,6 +14,7 @@ import {
 import { RecipeEngine } from './recipe.js';
 import { SessionRegistry } from './registry.js';
 import { DEFAULT_PORT } from './constants.js';
+import { applyFingerprint } from './fingerprint.js';
 import {
   AUTH_PROBE_SCRIPT,
   buildHandoff,
@@ -38,6 +39,9 @@ export class BrowserActions {
     const session = await mgr.getOrLaunch(options);
     const client = new CdpClient(session.wsUrl);
     await client.connect();
+    // 指纹是连接级覆盖：本次连接必须重新应用（新传入的优先，其次是会话里记录的）。
+    const fp = options.fingerprint ?? session.fingerprint;
+    if (fp) await applyFingerprint(client, fp);
     const browser = new BrowserActions(client, session.agent || options.agent, session.port);
     if (options.url && options.url !== 'about:blank' && session.url !== options.url) {
       await browser.open(options.url);
@@ -76,6 +80,7 @@ export class BrowserActions {
     try {
       const client = new CdpClient(session.wsUrl);
       await client.connect();
+      if (session.fingerprint) await applyFingerprint(client, session.fingerprint);
       return new BrowserActions(client, session.agent, session.port);
     } catch (_) {
       // 若原 targetId 标签已关闭或重定向，从该端口当前存活的 pages 中自愈重连
@@ -90,6 +95,7 @@ export class BrowserActions {
         ChromeManager.updateSessionUrl(activePage.url, activePage.title, session.port);
         const client = new CdpClient(activePage.webSocketDebuggerUrl);
         await client.connect();
+        if (session.fingerprint) await applyFingerprint(client, session.fingerprint);
         return new BrowserActions(client, session.agent, session.port);
       }
       throw new Error(`浏览器会话已失效 (Port: ${session.port})。请重新执行 \`lite-browser open <url>\`。`);
