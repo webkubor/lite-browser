@@ -19,6 +19,7 @@ import { discoverAssets } from './discover.js';
 import { parseFingerprintFlags } from './fingerprint.js';
 import { CHROME_USER_DATA_DIR, findProfileByAccount, listChromeProfiles, maskEmail } from './profiles.js';
 import { claimProfile, listClaims, releaseProfile, returnProfile, takeoverProfile } from './claims.js';
+import { egoOpen, egoSnapshot, egoEval, resolveEgoTarget } from './engines/ego.js';
 import { AutoPilot } from './auto.js';
 import {
   EXIT_AWAITING_HUMAN,
@@ -156,6 +157,9 @@ async function main() {
   let explicitUserDataDir: string | undefined;
   let explicitProfileDirectory: string | undefined;
   let explicitAccount: string | undefined;
+  let explicitEngine: string | undefined;
+  let explicitSpace: string | undefined;
+  let explicitPage: string | undefined;
   let reuse = false;
 
   const args: string[] = [];
@@ -170,6 +174,12 @@ async function main() {
       explicitProfileDirectory = rawArgs[++i];
     } else if (rawArgs[i] === '--account' && rawArgs[i + 1]) {
       explicitAccount = rawArgs[++i];
+    } else if (rawArgs[i] === '--engine' && rawArgs[i + 1]) {
+      explicitEngine = rawArgs[++i];
+    } else if (rawArgs[i] === '--space' && rawArgs[i + 1]) {
+      explicitSpace = rawArgs[++i];
+    } else if (rawArgs[i] === '--page' && rawArgs[i + 1]) {
+      explicitPage = rawArgs[++i];
     } else if (rawArgs[i] === '--reuse') {
       reuse = true;
     } else {
@@ -196,6 +206,24 @@ async function main() {
   };
 
   try {
+    // ego-browser 引擎：open / snapshot / eval 走 ego，其余命令仍走 CDP 引擎。
+    if (explicitEngine === 'ego' && (command === 'open' || command === 'snapshot' || command === 'eval')) {
+      const agentId = SessionRegistry.detectCurrentAgent(explicitAgent);
+      const target = resolveEgoTarget(explicitSpace, explicitPage);
+      if (command === 'open') {
+        const url = args[1];
+        if (!url) throw new Error('请提供 URL：lite-browser open <url> --engine ego');
+        process.stdout.write(egoOpen(agentId, target, url) + '\n');
+      } else if (command === 'snapshot') {
+        process.stdout.write(egoSnapshot(agentId, target) + '\n');
+      } else {
+        const code = args[1];
+        if (!code) throw new Error('请提供要在页面执行的 JS：lite-browser eval "<code>" --engine ego');
+        process.stdout.write(egoEval(agentId, target, code) + '\n');
+      }
+      return;
+    }
+
     switch (command) {
       case 'claim':
       case 'release':
