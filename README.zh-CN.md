@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.png" alt="ego lite" width="100%" />
+<img src="https://cdn.jsdelivr.net/gh/webkubor/free-imgbed@main/ego-lite-ref/banner.webp" alt="ego lite" width="100%" />
 
 **让 AI Agent 以最快速度执行网页自动化的浏览器**
 
@@ -123,7 +123,7 @@ Agent 会加载 `ego-browser` Skill，在自己的 Space 里打开页面，读�
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
+<img src="https://cdn.jsdelivr.net/gh/webkubor/free-imgbed@main/ego-lite-ref/ego-vs-agent-benchmark.webp" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
 
 </div>
 
