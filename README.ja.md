@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.png" alt="ego lite" width="100%" />
+<img src="https://cdn.jsdelivr.net/gh/webkubor/free-imgbed@main/ego-lite-ref/banner.webp" alt="ego lite" width="100%" />
 
 **AI エージェントが最速で Web 自動化を実行できるブラウザ**
 
@@ -123,7 +123,7 @@ ego lite を Vercel の agent-browser と 4 つの複雑なブラウザ自動化
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
+<img src="https://cdn.jsdelivr.net/gh/webkubor/free-imgbed@main/ego-lite-ref/ego-vs-agent-benchmark.webp" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
 
 </div>
 

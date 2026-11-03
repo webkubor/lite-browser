@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/banner.png" alt="ego lite" width="100%" />
+<img src="https://cdn.jsdelivr.net/gh/webkubor/free-imgbed@main/ego-lite-ref/banner.webp" alt="ego lite" width="100%" />
 
 **AI 에이전트의 웹 자동화가 가장 빠르게 돌아가는 브라우저**
 
@@ -123,7 +123,7 @@ ego-browser로 x.com에서 @ego_agent를 팔로우해 주세요
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
+<img src="https://cdn.jsdelivr.net/gh/webkubor/free-imgbed@main/ego-lite-ref/ego-vs-agent-benchmark.webp" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
 
 </div>
 
